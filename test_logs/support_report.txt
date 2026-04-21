@@ -1,0 +1,120 @@
+developer@zebra.com
+
+# RFID Connection Issue Report - Zebra TC22 / Flutter
+
+## Problem Report (EN)
+
+### Issue Description
+Flutter RFID application cannot connect to the RFID reader on Zebra TC22 device. Connection attempts fail with `RFID_API_COMMAND_TIMEOUT` error.
+The original Java sample (DWDemo) connects successfully every time.
+
+### Device Information
+- Device: Zebra TC22
+- Android Version: 14
+- Build: TC22R/TC22:14/14-35-10.00-UG-U105-STD-ATH-04
+- RFID SDK: 2.0.5.238
+
+### Error Logs
+```
+D RFID_HANDLER: CreateInstanceTask
+D RFID_HANDLER: SERVICE_USB reader count: 1
+D RFID_HANDLER: Found reader: TC22R
+D RFID_HANDLER: Connect attempt 1 of 3
+W RFID_HANDLER: Connect attempt 1 failed: OperationFailureException - Response timeout
+W RFID_HANDLER: Timeout detected - attempting rfidhost service reset...
+D RFID_HANDLER: Force-stopping com.zebra.rfidhost service...
+E RFID_HANDLER: Reset retry failed: OperationFailureException - null
+```
+
+Also observed:
+```
+E AndroidRuntime: java.lang.IllegalStateException: Already running
+E AndroidRuntime: 	at com.zebra.rfid.api3.SerialInputOutputManager.run(SourceFile:83)
+```
+
+### Key Findings
+1. **Cold boot works**: After power cycle, connection succeeds on first attempt
+2. **Force-stop doesn't work**: `am force-stop com.zebra.rfidhost` does not clear the stale SDK state
+3. **Only cold boot clears state**: Full device power cycle is the only way to reset the SerialInputOutputManager
+4. **Original Java sample works**: DWDemo connects successfully every time without requiring cold boot
+5. **RFIDHostService binding**: Service is bound to `com.symbol.datawedge` only - Flutter app cannot bind
+6. **DWDemo (system app) ALSO FAILS**: Even the built-in `com.zebra.rfid.rwdemo` (a privileged system app) cannot connect after force-stop + restart!
+
+### CRITICAL NEW FINDING
+**The DWDemo app (which is a pre-installed SYSTEM app with special privileges) ALSO fails to connect after `am force-stop` + restart with the same `RFID_API_COMMAND_TIMEOUT` error!**
+
+This means the issue is NOT specific to Flutter or our implementation - it's a DEVICE-WIDE issue with the RFID SDK itself.
+
+The stale SerialInputOutputManager state affects ALL applications, including the privileged system app `com.zebra.rfid.rwdemo`.
+
+### Root Cause Hypothesis
+The SDK's internal `SerialInputOutputManager` thread gets stuck after a failed connection attempt. This stale thread state cannot be cleared via `am force-stop` - only a full cold boot resets it. The original Java sample may use `CriticalPermissionsHelper` which grants special system permissions that allow proper cleanup.
+
+### Questions for Zebra Support
+1. Why does `am force-stop com.zebra.rfidhost` not reset the SerialInputOutputManager internal state?
+2. What does the original Java sample's `CriticalPermissionsHelper` do that allows stable reconnection?
+3. Is there a proper API or procedure to reset the RFID SDK internal state without cold boot?
+4. **CONFIRMED**: Even the privileged system app `com.zebra.rfid.rwdemo` cannot reconnect after force-stop + restart. Is this expected behavior or a bug?
+5. **CONFIRMED**: This is a DEVICE-WIDE issue affecting ALL applications after the first failed connection attempt.
+
+### Contact
+- Developer Portal: https://developer.zebra.com
+- TechDocs: https://techdocs.zebra.com
+
+---
+
+## Sorun Raporu (TR)
+
+### Sorun Açıklaması
+Flutter RFID uygulaması Zebra TC22 cihazında RFID okuyucuya bağlanamıyor. Bağlantı girişimleri `RFID_API_COMMAND_TIMEOUT` hatasıyla başarısız oluyor. Orijinal Java örneği (DWDemo) ise her zaman başarıyla bağlanıyor.
+
+### Cihaz Bilgileri
+- Cihaz: Zebra TC22
+- Android Sürümü: 14
+- Build: TC22R/TC22:14/14-35-10.00-UG-U105-STD-ATH-04
+- RFID SDK: 2.0.5.238
+
+### Hata Logları
+```
+D RFID_HANDLER: CreateInstanceTask
+D RFID_HANDLER: SERVICE_USB reader count: 1
+D RFID_HANDLER: Found reader: TC22R
+D RFID_HANDLER: Connect attempt 1 of 3
+W RFID_HANDLER: Connect attempt 1 failed: OperationFailureException - Response timeout
+W RFID_HANDLER: Timeout detected - attempting rfidhost service reset...
+D RFID_HANDLER: Force-stopping com.zebra.rfidhost service...
+E RFID_HANDLER: Reset retry failed: OperationFailureException - null
+```
+
+Ayrıca gözlemlenen:
+```
+E AndroidRuntime: java.lang.IllegalStateException: Already running
+E AndroidRuntime: 	at com.zebra.rfid.api3.SerialInputOutputManager.run(SourceFile:83)
+```
+
+### Temel Bulgular
+1. **Cold boot işe yarıyor**: Güç döngüsünden sonra bağlantı ilk denemede başarılı
+2. **Force-stop işe yaramıyor**: `am force-stop com.zebra.rfidhost` SDK'nın iç durumunu temizlemiyor
+3. **Sadece cold boot temizliyor**: Tam cihaz güç döngüsü, SerialInputOutputManager'ı sıfırlamanın tek yolu
+4. **Orijinal Java örneği çalışıyor**: DWDemo cold boot gerektirmeden her zaman başarıyla bağlanıyor
+5. **RFIDHostService bağlantısı**: Servis sadece `com.symbol.datawedge`'e bağlı - Flutter uygulaması bağlanamıyor
+6. **DWDemo (sistem uygulaması) DA BAŞARISIZ**: Dahili sistem uygulaması `com.zebra.rfid.rwdemo` bile force-stop + yeniden başlatma sonrası bağlanamıyor!
+
+### KRITIK YENI BULGU
+**DWDemo uygulaması (ayrıcalıklı sistem uygulaması olarak önceden yüklenmiş) bile `am force-stop` + yeniden başlatma sonrası aynı `RFID_API_COMMAND_TIMEOUT` hatasıyla başarısız oluyor!**
+
+Bu, sorunun Flutter veya bizim implementasyonumuzla ilgili OLMADIĞINI - RFID SDK'sının kendisinde CİHAZ ÇAPINDA bir sorun olduğunu gösteriyor.
+
+### Kök Neden Hipotezi
+SDK'nın içindeki `SerialInputOutputManager` iş parçacığı başarısız bir bağlantı girişiminden sonra takılıp kalıyor. Bu kalıcı iş parçacığı durumu `am force-stop` ile temizlenemiyor - sadece tam güç döngüsü sıfırlıyor. Orijinal Java örneği, düzgün temizlik sağlayan özel sistem izinlerini veren `CriticalPermissionsHelper` kullanıyor olabilir.
+
+### Zebra Destek'e Sorular
+1. Neden `am force-stop com.zebra.rfidhost` SerialInputOutputManager'ın iç durumunu resetlemiyor?
+2. Orijinal Java örneğinin `CriticalPermissionsHelper`'ı ne yapıyor da stabil yeniden bağlanmayı sağlıyor?
+3. Cold boot olmadan RFID SDK'nın iç durumunu reset etmek için bir API veya prosedür var mı?
+4. **DOĞRULANDI**: Ayrıcalıklı sistem uygulaması `com.zebra.rfid.rwdemo` bile force-stop + yeniden başlatma sonrası yeniden bağlanamıyor. Bu beklenen bir davranış mı yoksa bir hata mı?
+5. **DOĞRULANDI**: Bu, ilk başarısız bağlantı girişiminden sonra TÜM uygulamaları etkileyen CİHAZ ÇAPINDA bir sorun.
+
+### İletişim
+- Geliştirici Portalı: https://developer.zebra.com
+- TechDocs: https://techdocs.zebra.com

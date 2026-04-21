@@ -1,0 +1,10 @@
+--------- beginning of main
+04-21 14:35:34.535 13352 13352 D RFID_HANDLER: reader is not connected
+04-21 14:35:34.544 13352 13352 D RFID_HANDLER: reader is not connected
+04-21 14:35:35.056 13352 13406 D RFID_HANDLER: Refreshed reader list: 1 readers
+04-21 14:35:35.568 13352 13406 D RFID_HANDLER: Connect attempt 1 of 3
+04-21 14:35:46.140 13352 13406 W RFID_HANDLER: Connect attempt 1 failed: OperationFailureException - Response timeout
+04-21 14:35:46.140 13352 13406 D RFID_HANDLER: Waiting 1000ms before retry...
+04-21 14:35:47.141 13352 13406 D RFID_HANDLER: Refreshing reader reference for attempt 2
+04-21 14:35:47.654 13352 13406 D RFID_HANDLER: Refreshed reader list: 1 readers
+04-21 14:35:47.654 13352 13406 D RFID_HANDLER: Connect attempt 2 of 3

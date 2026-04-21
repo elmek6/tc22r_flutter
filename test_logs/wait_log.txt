@@ -1,0 +1,8 @@
+--------- beginning of main
+04-21 14:13:06.291  9676  9746 D RFID_HANDLER: CreateInstanceTask
+04-21 14:13:06.334  9676  9676 D RFID_HANDLER: reader is not connected
+04-21 14:13:06.858  9676  9746 D RFID_HANDLER: SERVICE_USB reader count: 1
+04-21 14:13:06.858  9676  9746 D RFID_HANDLER: Found reader: TC22R
+04-21 14:13:08.359  9676  9676 D RFID_HANDLER: reader is not connected
+04-21 14:13:08.864  9676  9746 D RFID_HANDLER: Refreshed reader list: 1 readers
+04-21 14:13:09.370  9676  9746 D RFID_HANDLER: Connect attempt 1 of 3

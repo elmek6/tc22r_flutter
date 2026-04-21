@@ -1,0 +1,51 @@
+--------- beginning of main
+04-21 14:44:09.716 14747 14811 D RFID_HANDLER: CreateInstanceTask
+04-21 14:44:09.741 14747 14747 D RFID_HANDLER: reader is not connected
+04-21 14:44:10.307 14747 14811 D RFID_HANDLER: SERVICE_USB reader count: 1
+04-21 14:44:10.307 14747 14811 D RFID_HANDLER: Found reader: TC22R
+04-21 14:44:11.811 14747 14747 D RFID_HANDLER: reader is not connected
+04-21 14:44:12.329 14747 14811 D RFID_HANDLER: Refreshed reader list: 1 readers
+04-21 14:44:12.842 14747 14811 D RFID_HANDLER: Connect attempt 1 of 3
+04-21 14:44:24.929 14747 14811 W RFID_HANDLER: Connect attempt 1 failed: OperationFailureException - Response timeout
+04-21 14:44:24.929 14747 14811 D RFID_HANDLER: Waiting 1000ms before retry...
+04-21 14:44:25.930 14747 14811 D RFID_HANDLER: Refreshing reader reference for attempt 2
+04-21 14:44:26.444 14747 14811 D RFID_HANDLER: Refreshed reader list: 1 readers
+04-21 14:44:26.445 14747 14811 D RFID_HANDLER: Connect attempt 2 of 3
+04-21 14:44:37.007 14747 14811 W RFID_HANDLER: Connect attempt 2 failed: OperationFailureException - Response timeout
+04-21 14:44:37.007 14747 14811 D RFID_HANDLER: Waiting 2000ms before retry...
+04-21 14:44:39.008 14747 14811 D RFID_HANDLER: Refreshing reader reference for attempt 3
+04-21 14:44:39.521 14747 14811 D RFID_HANDLER: Refreshed reader list: 1 readers
+04-21 14:44:39.521 14747 14811 D RFID_HANDLER: Connect attempt 3 of 3
+04-21 14:44:50.076 14747 14811 W RFID_HANDLER: Connect attempt 3 failed: OperationFailureException - Response timeout
+04-21 14:44:50.077 14747 14811 W RFID_HANDLER: Timeout detected - attempting rfidhost service reset...
+04-21 14:44:50.077 14747 14811 D RFID_HANDLER: Force-stopping com.zebra.rfidhost service...
+04-21 14:44:52.087 14747 14811 D RFID_HANDLER: Clearing reader references...
+04-21 14:44:52.092 14747 14811 D RFID_HANDLER: Recreating Readers instance...
+04-21 14:44:52.611 14747 14811 D RFID_HANDLER: After reset - SERVICE_USB reader count: 1
+04-21 14:44:54.112 14747 14811 D RFID_HANDLER: Retry connection after reset...
+04-21 14:45:04.668 14747 14811 E RFID_HANDLER: Reset retry failed: OperationFailureException - null
+04-21 14:45:05.054 14747 14747 D RFID_HANDLER: reader is not connected
+04-21 14:45:13.906 14747 14811 D RFID_HANDLER: CreateInstanceTask
+04-21 14:45:14.423 14747 14811 D RFID_HANDLER: SERVICE_USB reader count: 1
+04-21 14:45:14.423 14747 14811 D RFID_HANDLER: Found reader: TC22R
+04-21 14:45:15.926 14747 14747 D RFID_HANDLER: reader is not connected
+04-21 14:45:16.441 14747 14811 D RFID_HANDLER: Refreshed reader list: 1 readers
+04-21 14:45:16.953 14747 14811 D RFID_HANDLER: Connect attempt 1 of 3
+04-21 14:45:27.524 14747 14811 W RFID_HANDLER: Connect attempt 1 failed: OperationFailureException - Response timeout
+04-21 14:45:27.524 14747 14811 D RFID_HANDLER: Waiting 1000ms before retry...
+04-21 14:45:28.527 14747 14811 D RFID_HANDLER: Refreshing reader reference for attempt 2
+04-21 14:45:29.041 14747 14811 D RFID_HANDLER: Refreshed reader list: 1 readers
+04-21 14:45:29.042 14747 14811 D RFID_HANDLER: Connect attempt 2 of 3
+04-21 14:45:39.609 14747 14811 W RFID_HANDLER: Connect attempt 2 failed: OperationFailureException - Response timeout
+04-21 14:45:39.609 14747 14811 D RFID_HANDLER: Waiting 2000ms before retry...
+04-21 14:45:41.611 14747 14811 D RFID_HANDLER: Refreshing reader reference for attempt 3
+04-21 14:45:42.126 14747 14811 D RFID_HANDLER: Refreshed reader list: 1 readers
+04-21 14:45:42.126 14747 14811 D RFID_HANDLER: Connect attempt 3 of 3
+04-21 14:45:52.689 14747 14811 W RFID_HANDLER: Connect attempt 3 failed: OperationFailureException - Response timeout
+04-21 14:45:52.692 14747 14811 W RFID_HANDLER: Timeout detected - attempting rfidhost service reset...
+04-21 14:45:52.693 14747 14811 D RFID_HANDLER: Force-stopping com.zebra.rfidhost service...
+04-21 14:45:54.701 14747 14811 D RFID_HANDLER: Clearing reader references...
+04-21 14:45:54.705 14747 14811 D RFID_HANDLER: Recreating Readers instance...
+04-21 14:45:55.222 14747 14811 D RFID_HANDLER: After reset - SERVICE_USB reader count: 1
+04-21 14:45:56.725 14747 14811 D RFID_HANDLER: Retry connection after reset...
+04-21 14:46:07.290 14747 14811 E RFID_HANDLER: Reset retry failed: OperationFailureException - null

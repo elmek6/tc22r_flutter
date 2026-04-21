@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <application
+        android:name=".MainApplication"
+        android:allowBackup="true"
+        android:appComponentFactory="androidx.core.app.CoreComponentFactory"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.AppTheme">
+        <activity
+            android:name=".ScannerActivity"
+            android:exported="false" />
+        <activity
+            android:name=".TagReadUserMemoryActivity"
+            android:exported="false" />
+        <activity android:name=".EPCWriteActivity"
+            android:exported="false" />
+        <activity
+            android:name=".TagLocateActivity"
+            android:exported="false" />
+        <activity
+            android:name=".SplashActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <activity
+            android:name=".TagInventoryActivity"
+            android:exported="true"
+            android:label="@string/app_name"></activity>
+
+        <uses-library
+            android:name="com.symbol.emdk"
+            android:required="false" />
+    </application>
+
+    <queries>
+        <package android:name="com.symbol.datawedge" />
+        <package android:name="com.symbol.emdk.emdkservice" />
+    </queries>
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
+    <uses-permission android:name="android.permission.BLUETOOTH" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
+    <uses-permission android:name="com.symbol.emdk.permission.EMDK" />
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+
+    <uses-permission android:name="com.symbol.datawedge.permission.contentprovider" />
+    <queries>
+        <package android:name="com.symbol.datawedge" />
+    </queries>
+
+    <permission android:name="com.zebra.scannercontrol.SERVICE_LAUNCH_PERMISSION"
+        android:protectionLevel="normal" />
+
+    <permission android:name="com.zebra.scannercontrol.ACTIVITY_LAUNCH_PERMISSION"
+         android:protectionLevel="normal" />
+
+</manifest>

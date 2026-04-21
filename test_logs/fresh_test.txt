@@ -1,0 +1,20 @@
+--------- beginning of main
+04-21 14:29:16.111 12834 12888 D RFID_HANDLER: CreateInstanceTask
+04-21 14:29:16.142 12834 12834 D RFID_HANDLER: reader is not connected
+04-21 14:29:16.666 12834 12888 D RFID_HANDLER: SERVICE_USB reader count: 1
+04-21 14:29:16.666 12834 12888 D RFID_HANDLER: Found reader: TC22R
+04-21 14:29:18.169 12834 12834 D RFID_HANDLER: reader is not connected
+04-21 14:29:18.681 12834 12890 D RFID_HANDLER: Refreshed reader list: 1 readers
+04-21 14:29:19.195 12834 12890 D RFID_HANDLER: Connect attempt 1 of 3
+04-21 14:29:31.282 12834 12890 W RFID_HANDLER: Connect attempt 1 failed: OperationFailureException - Response timeout
+04-21 14:29:31.282 12834 12890 D RFID_HANDLER: Waiting 1000ms before retry...
+04-21 14:29:32.284 12834 12890 D RFID_HANDLER: Refreshing reader reference for attempt 2
+04-21 14:29:32.799 12834 12890 D RFID_HANDLER: Refreshed reader list: 1 readers
+04-21 14:29:32.800 12834 12890 D RFID_HANDLER: Connect attempt 2 of 3
+04-21 14:29:43.358 12834 12890 W RFID_HANDLER: Connect attempt 2 failed: OperationFailureException - Response timeout
+04-21 14:29:43.358 12834 12890 D RFID_HANDLER: Waiting 2000ms before retry...
+04-21 14:29:45.360 12834 12890 D RFID_HANDLER: Refreshing reader reference for attempt 3
+04-21 14:29:45.873 12834 12890 D RFID_HANDLER: Refreshed reader list: 1 readers
+04-21 14:29:45.874 12834 12890 D RFID_HANDLER: Connect attempt 3 of 3
+04-21 14:29:56.435 12834 12890 W RFID_HANDLER: Connect attempt 3 failed: OperationFailureException - Response timeout
+04-21 14:29:56.435 12834 12890 E RFID_HANDLER: Connection failed: Response timeout RFID_API_COMMAND_TIMEOUT
