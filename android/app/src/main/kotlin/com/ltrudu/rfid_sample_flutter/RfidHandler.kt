@@ -52,6 +52,10 @@ class RfidHandler {
     // Keeps RFID connection alive when switching between screens (mirrors original keepConnexion flag)
     var keepConnection = false
 
+    // Lock object for synchronizing RFID connection operations
+    // Prevents concurrent access to SerialInputOutputManager
+    private val connectionLock = Any()
+
     interface RfidHandlerInterface {
         fun onReaderConnected(message: String)
         fun onReaderDisconnected()
@@ -95,6 +99,12 @@ class RfidHandler {
     private fun createInstance() {
         try {
             Log.d(TAG, "CreateInstanceTask")
+            
+            // NOTE: Unlike our initial approach, the original Java sample does NOT force-stop
+            // Zebra services. The RFID SDK handles everything internally.
+            // Removing force-stop logic as it may be causing connection timeouts.
+            // If you experience issues, consider adding it back but test thoroughly.
+            
             readers = Readers(context, ENUM_TRANSPORT.SERVICE_USB)
             var list = readers!!.GetAvailableRFIDReaderList()
             Log.d(TAG, "SERVICE_USB reader count: ${list.size}")
@@ -156,15 +166,52 @@ class RfidHandler {
     @Synchronized
     private fun connectReader() {
         if (!isReaderConnected()) {
+            // Use connectionLock to prevent concurrent access to SerialInputOutputManager
             CoroutineScope(Dispatchers.IO).launch {
-                // Always refresh the reader list to get a fresh reference
-                if (readers != null) {
-                    refreshAvailableReaders()
-                }
-                if (reader == null) getAvailableReader()
-                val result = if (reader != null) connect() else "Failed to find reader"
-                CoroutineScope(Dispatchers.Main).launch {
-                    connectionInterface?.onReaderConnected(result)
+                synchronized(connectionLock) {
+                    // Check if readers is in a stale state by trying to get the list
+                    var needsReset = false
+                    if (readers != null) {
+                        try {
+                            refreshAvailableReaders()
+                        } catch (e: Exception) {
+                            Log.w(TAG, "refreshAvailableReaders failed: ${e.message} - needs reset")
+                            needsReset = true
+                        }
+                    }
+                    
+                    if (needsReset || readers == null) {
+                        // Reset the SDK state before trying to connect
+                        Log.w(TAG, "SDK appears to be in stale state, triggering reset...")
+                        val resetResult = resetAndRetry()
+                        CoroutineScope(Dispatchers.Main).launch {
+                            connectionInterface?.onReaderConnected(resetResult ?: "Reset failed")
+                        }
+                        return@launch
+                    }
+                    
+                    if (reader == null) getAvailableReader()
+                    var result = if (reader != null) connect() else "Failed to find reader"
+
+                    // First attempt failed → auto-reset SDK state and retry once
+                    if (!result.startsWith("Connected")) {
+                        Log.w(TAG, "Initial connect failed ($result) — auto-resetting SDK...")
+                        CoroutineScope(Dispatchers.Main).launch {
+                            connectionInterface?.onMessage("Bağlantı başarısız, SDK sıfırlanıyor…")
+                        }
+                        result = resetAndRetry()
+                    }
+
+                    // Configure reader immediately after successful connection so
+                    // performInventory() only needs to call perform() — no 12-call
+                    // reconfiguration on each inventory start that causes timeouts.
+                    if (result.startsWith("Connected")) {
+                        configureReaderOnConnect()
+                    }
+
+                    CoroutineScope(Dispatchers.Main).launch {
+                        connectionInterface?.onReaderConnected(result)
+                    }
                 }
             }
         } else {
@@ -172,6 +219,7 @@ class RfidHandler {
         }
     }
     
+    @Synchronized
     private fun refreshAvailableReaders() {
         try {
             readers?.let { r ->
@@ -185,31 +233,33 @@ class RfidHandler {
 
     // Picks the single reader if available, otherwise searches for one containing "RFD90"
     private fun getAvailableReader() {
-        readers?.let { r ->
-            try {
-                Readers.attach(object : Readers.RFIDReaderEventHandler {
-                    override fun RFIDReaderAppeared(device: ReaderDevice) {
-                        connectionInterface?.onMessage("RFIDReaderAppeared")
-                        connectReader()
+        synchronized(connectionLock) {
+            readers?.let { r ->
+                try {
+                    Readers.attach(object : Readers.RFIDReaderEventHandler {
+                        override fun RFIDReaderAppeared(device: ReaderDevice) {
+                            connectionInterface?.onMessage("RFIDReaderAppeared")
+                            connectReader()
+                        }
+                        override fun RFIDReaderDisappeared(device: ReaderDevice) {
+                            connectionInterface?.onMessage("RFIDReaderDisappeared")
+                            if (reader != null && device.name == reader!!.hostName) disconnect()
+                        }
+                    })
+                    availableRFIDReaderList = r.GetAvailableRFIDReaderList()
+                    val list = availableRFIDReaderList ?: return
+                    if (list.isNotEmpty()) {
+                        readerDevice = if (list.size == 1) {
+                            list[0]
+                        } else {
+                            // Match by name prefix used in the original sample
+                            list.find { it.name.contains("RFD90") } ?: list[0]
+                        }
+                        reader = readerDevice!!.getRFIDReader()
                     }
-                    override fun RFIDReaderDisappeared(device: ReaderDevice) {
-                        connectionInterface?.onMessage("RFIDReaderDisappeared")
-                        if (reader != null && device.name == reader!!.hostName) disconnect()
-                    }
-                })
-                availableRFIDReaderList = r.GetAvailableRFIDReaderList()
-                val list = availableRFIDReaderList ?: return
-                if (list.isNotEmpty()) {
-                    readerDevice = if (list.size == 1) {
-                        list[0]
-                    } else {
-                        // Match by name prefix used in the original sample
-                        list.find { it.name.contains("RFD90") } ?: list[0]
-                    }
-                    reader = readerDevice!!.getRFIDReader()
+                } catch (e: InvalidUsageException) {
+                    e.printStackTrace()
                 }
-            } catch (e: InvalidUsageException) {
-                e.printStackTrace()
             }
         }
     }
@@ -221,27 +271,15 @@ class RfidHandler {
     }
 
     fun connect(): String {
-        var lastException: Exception? = null
-        var delay = INITIAL_RETRY_DELAY_MS
-        
-        for (attempt in 1..MAX_CONNECT_RETRIES) {
+        // Use connectionLock to prevent concurrent access to SerialInputOutputManager
+        // This prevents "Already running" IllegalStateException
+        return synchronized(connectionLock) {
             try {
-                // Refresh reader reference before each attempt
-                if (reader == null) {
-                    Log.d(TAG, "Refreshing reader reference for attempt $attempt")
-                    refreshAvailableReaders()
-                    if (availableRFIDReaderList?.isNotEmpty() == true) {
-                        readerDevice = availableRFIDReaderList!!.firstOrNull { it.name.contains("TC22R") } 
-                            ?: availableRFIDReaderList!![0]
-                        reader = readerDevice?.getRFIDReader()
-                    }
-                }
-                
                 if (reader != null && !reader!!.isConnected) {
-                    Log.d(TAG, "Connect attempt $attempt of $MAX_CONNECT_RETRIES")
+                    Log.d(TAG, "Connecting to ${reader!!.hostName}")
                     reader!!.connect()
                     if (reader!!.isConnected) {
-                        Log.d(TAG, "Connected successfully on attempt $attempt")
+                        Log.d(TAG, "Connected successfully")
                         return "Connected: ${reader!!.hostName}"
                     }
                 } else if (reader?.isConnected == true) {
@@ -250,135 +288,96 @@ class RfidHandler {
                     Log.d(TAG, "Reader is null, cannot connect")
                 }
             } catch (e: InvalidUsageException) {
-                lastException = e
-                Log.w(TAG, "Connect attempt $attempt failed: InvalidUsageException - ${e.message}")
+                Log.e(TAG, "InvalidUsageException: ${e.message}")
+                return "Connection failed: ${e.message}"
             } catch (e: OperationFailureException) {
-                lastException = e
-                Log.w(TAG, "Connect attempt $attempt failed: OperationFailureException - ${e.vendorMessage}")
+                Log.e(TAG, "OperationFailureException: ${e.vendorMessage}")
+                return "Connection failed: ${e.vendorMessage} ${e.results}"
             } catch (e: Exception) {
-                // SDK can throw NullPointerException internally (e.g. RFIDHostEventAndReason null)
-                // when the rfidhost service is not yet ready.
-                lastException = e
-                Log.w(TAG, "Connect attempt $attempt failed: ${e.javaClass.simpleName} - ${e.message}")
+                Log.e(TAG, "Connection error: ${e.message}")
+                return "Connection error: ${e.message}"
             }
-            
-            // Reset reader for next attempt
-            reader = null
-            
-            // Exponential backoff before retry (except on last attempt)
-            if (attempt < MAX_CONNECT_RETRIES) {
-                Log.d(TAG, "Waiting ${delay}ms before retry...")
-                Thread.sleep(delay)
-                delay *= 2  // Exponential backoff
-            }
+            return "Failed to connect"
         }
-        
-        // All retries exhausted - attempt SDK reset and one final retry
-        val errorMsg = lastException?.let {
-            when (it) {
-                is OperationFailureException -> "Connection failed: ${it.vendorMessage} ${it.results}"
-                is InvalidUsageException -> "Error: ${it.message}"
-                else -> "Connection error: ${it.message}"
-            }
-        } ?: "Failed to connect after $MAX_CONNECT_RETRIES attempts"
-        
-        // Check if this is a timeout error that might be fixed by resetting the rfidhost service
-        val isTimeoutError = lastException is OperationFailureException && 
-            (lastException as OperationFailureException).vendorMessage.contains("timeout", ignoreCase = true)
-        
-        if (isTimeoutError) {
-            Log.w(TAG, "Timeout detected - attempting rfidhost service reset...")
-            return resetAndRetry() ?: errorMsg
-        }
-        
-        Log.e(TAG, errorMsg)
-        return errorMsg
     }
     
-    // Resets the com.zebra.rfidhost service to clear stale SerialInputOutputManager state,
-    // then creates a fresh Readers instance and retries the connection once.
+    // Resets SDK state by disposing the stale Readers instance and recreating it,
+    // then retries the connection once.
     //
-    // SOURCE: Stack Overflow - Zebra SDK exception RFID_API_COMMAND_TIMEOUT when reconnecting
-    // https://stackoverflow.com/a/...
-    // Fix requires: readers.Dispose() + set to null + wait 500ms + create new Readers()
-    // This pattern clears the internal SerialInputOutputManager thread that gets stuck.
+    // SOURCE: Stack Overflow — Zebra SDK RFID_API_COMMAND_TIMEOUT on reconnect:
+    // readers.Dispose() + null + sleep(1000) + new Readers() clears the stuck
+    // SerialInputOutputManager thread inside rfidhost without needing force-stop.
+    // NOTE: am force-stop is intentionally NOT used — it requires system permissions
+    // and the research confirmed it was causing additional timeouts.
+    @Synchronized
     private fun resetAndRetry(): String {
         try {
             context?.let { ctx ->
-                // Step 1: Force-stop the rfidhost service to reset SDK internal state
-                Log.d(TAG, "Force-stopping com.zebra.rfidhost service...")
-                Runtime.getRuntime().exec("am force-stop com.zebra.rfidhost")
-                Thread.sleep(2000)  // Wait for service to fully terminate
-                
-                // Step 2: Clear all reader references and dispose
-                Log.d(TAG, "Clearing reader references...")
+                Log.d(TAG, "SDK reset: disposing stale Readers instance...")
+
+                // Disconnect and clear all references before Dispose
                 try {
-                    if (reader?.isConnected() == true) {
-                        reader?.disconnect()
-                    }
+                    if (reader?.isConnected == true) reader?.disconnect()
                 } catch (e: Exception) { /* ignore */ }
                 reader = null
                 readerDevice = null
-                
+
                 try {
                     readers?.Dispose()
                 } catch (e: Exception) { /* ignore */ }
                 readers = null
                 availableRFIDReaderList = null
-                
-                // CRITICAL: Wait for SDK to fully release native resources
-                // Without this delay, the new Readers instance will have stale state
-                Log.d(TAG, "Waiting 1000ms for SDK cleanup...")
-                Thread.sleep(1000)
-                
-                // Step 3: Recreate Readers instance fresh
+
+                // Wait for rfidhost to release SerialInputOutputManager resources
+                Log.d(TAG, "Waiting 1500ms for SDK resource release...")
+                Thread.sleep(1500)
+
+                // Recreate Readers fresh — forces rfidhost to rebind cleanly
                 Log.d(TAG, "Recreating Readers instance...")
                 readers = Readers(ctx, ENUM_TRANSPORT.SERVICE_USB)
+                Thread.sleep(1500)
+
                 val list = readers!!.GetAvailableRFIDReaderList()
-                Log.d(TAG, "After reset - SERVICE_USB reader count: ${list.size}")
-                
+                Log.d(TAG, "After reset — SERVICE_USB reader count: ${list.size}")
+
                 if (list.isNotEmpty()) {
                     availableRFIDReaderList = list
                     readerDevice = list.firstOrNull { it.name.contains("TC22R") } ?: list[0]
                     reader = readerDevice!!.getRFIDReader()
-                    
-                    // Brief delay for service binding
-                    Thread.sleep(SERVICE_READY_DELAY_MS)
-                    
-                    // Step 4: Single connection attempt on fresh state
+
                     Log.d(TAG, "Retry connection after reset...")
-                    reader!!.connect()
-                    if (reader!!.isConnected) {
-                        Log.d(TAG, "Connected successfully after rfidhost reset!")
-                        return "Connected after reset: ${reader!!.hostName}"
+                    try {
+                        reader!!.connect()
+                        if (reader!!.isConnected) {
+                            Log.d(TAG, "Connected successfully after SDK reset!")
+                            configureReaderOnConnect()
+                            return "Connected: ${reader!!.hostName}"
+                        }
+                    } catch (e: OperationFailureException) {
+                        Log.w(TAG, "Reset connect failed: ${e.vendorMessage}")
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Reset connect failed: ${e.message}")
                     }
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Reset retry failed: ${e.javaClass.simpleName} - ${e.message}")
+            Log.e(TAG, "resetAndRetry failed: ${e.javaClass.simpleName} — ${e.message}")
         }
-        
-        // If reset retry also failed, clear state and return original error
-        try {
-            if (reader?.isConnected() == true) {
-                reader?.disconnect()
-            }
-            reader = null
-            readers?.Dispose()
-            readers = null
-        } catch (e: Exception) { /* ignore */ }
+
         reader = null
         readers = null
         availableRFIDReaderList = null
-        
-        return "Connection failed (reset attempted): RFID_API_COMMAND_TIMEOUT"
+        return "Bağlantı başarısız (SDK reset denendi). Cihazı yeniden başlatın."
     }
 
     fun disconnect(): String {
         Log.d(TAG, "Disconnect")
         return try {
             reader?.let {
-                if (eventHandler != null) it.Events.removeEventsListener(eventHandler)
+                if (eventHandler != null) {
+                    it.Events.removeEventsListener(eventHandler)
+                    eventHandler = null
+                }
                 it.disconnect()
                 connectionInterface?.onMessage("Disconnecting reader")
             }
@@ -413,44 +412,35 @@ class RfidHandler {
         }
     }
 
-    // Configures the reader for RFID inventory mode.
-    // Mirrors ConfigureReaderForInventory() in the original Java sample exactly:
-    // trigger mode RFID, SESSION_S0, max power, no prefilters.
-    fun configureReaderForInventory() {
-        Log.d(TAG, "=== configureReaderForInventory called ===")
+    // Called once right after reader.connect() succeeds.
+    // Sets up event listener, antenna config, and singulation — everything except
+    // RFID_MODE which must be set/cleared around each individual inventory session.
+    private fun configureReaderOnConnect() {
+        Log.d(TAG, "=== configureReaderOnConnect called ===")
         if (reader?.isConnected != true) {
-            Log.e(TAG, "configureReaderForInventory: reader not connected")
+            Log.e(TAG, "configureReaderOnConnect: reader not connected")
             return
         }
-        Log.d(TAG, "ConfigureReaderForInventory ${reader!!.hostName}")
-
+        Log.d(TAG, "Configuring reader: ${reader!!.hostName}")
         val triggerInfo = TriggerInfo().apply {
             StartTrigger.triggerType = START_TRIGGER_TYPE.START_TRIGGER_TYPE_IMMEDIATE
             StopTrigger.triggerType = STOP_TRIGGER_TYPE.STOP_TRIGGER_TYPE_IMMEDIATE
         }
         try {
-            // Re-register event listener to avoid duplicates
+            // Register event handler once — stays registered for the life of the connection
             if (eventHandler == null) {
                 eventHandler = EventHandler()
                 reader!!.Events.addEventsListener(eventHandler)
-                Log.d(TAG, "Added event handler (was null)")
-            } else {
-                reader!!.Events.removeEventsListener(eventHandler)
-                eventHandler = EventHandler()
-                reader!!.Events.addEventsListener(eventHandler)
-                Log.d(TAG, "Re-added event handler (was not null)")
+                Log.d(TAG, "Event handler registered")
             }
 
             reader!!.Events.setHandheldEvent(true)
             reader!!.Events.setTagReadEvent(true)
             reader!!.Events.setAttachTagDataWithReadEvent(false)
-            Log.d(TAG, "Events configured - handheld=true, tagRead=true")
+            Log.d(TAG, "Events configured")
 
-            // RFID_MODE prevents the barcode laser from firing during inventory
-            reader!!.Config.setTriggerMode(ENUM_TRIGGER_MODE.RFID_MODE, false)
-            reader!!.Config.startTrigger = triggerInfo.StartTrigger
-            reader!!.Config.stopTrigger = triggerInfo.StopTrigger
-            Log.d(TAG, "Trigger mode set to RFID_MODE")
+            reader!!.Config.setStartTrigger(triggerInfo.StartTrigger)
+            reader!!.Config.setStopTrigger(triggerInfo.StopTrigger)
 
             // Power levels are index-based; use max supported by this reader
             mAntennaPower = reader!!.ReaderCapabilities.getTransmitPowerLevelValues().size - 1
@@ -470,6 +460,7 @@ class RfidHandler {
             reader!!.Config.Antennas.setSingulationControl(1, sc)
 
             reader!!.Actions.PreFilters.deleteAll()
+            Log.d(TAG, "Reader configuration complete")
         } catch (e: InvalidUsageException) {
             e.printStackTrace()
         } catch (e: OperationFailureException) {
@@ -480,12 +471,20 @@ class RfidHandler {
     @Synchronized
     fun performInventory() {
         Log.d(TAG, "=== performInventory called ===")
+        if (!isReaderConnected()) {
+            Log.e(TAG, "performInventory: reader not connected")
+            CoroutineScope(Dispatchers.Main).launch {
+                connectionInterface?.onMessage("RFID bağlı değil - önce bağlantı bekleniyor")
+            }
+            return
+        }
         try {
-            Log.d(TAG, "Calling configureReaderForInventory...")
-            configureReaderForInventory()
-            Log.d(TAG, "Calling reader.Actions.Inventory.perform...")
+            // RFID_MODE: second param false = do NOT suspend DataWedge.
+            // Original Java sample uses false — matches TC22R behavior.
+            reader!!.Config.setTriggerMode(ENUM_TRIGGER_MODE.RFID_MODE, false)
+            Log.d(TAG, "RFID_MODE set, starting inventory...")
             reader?.Actions?.Inventory?.perform()
-            Log.d(TAG, "performInventory completed successfully")
+            Log.d(TAG, "performInventory completed")
         } catch (e: InvalidUsageException) {
             Log.e(TAG, "performInventory: InvalidUsageException - ${e.message}")
             e.printStackTrace()
@@ -555,21 +554,28 @@ class RfidHandler {
 
         override fun eventStatusNotify(rfidStatusEvents: RfidStatusEvents) {
             Log.d(TAG, "Status Notification: ${rfidStatusEvents.StatusEventData.statusEventType}")
-            when (rfidStatusEvents.StatusEventData.statusEventType) {
+            val statusType = rfidStatusEvents.StatusEventData.statusEventType
+            when (statusType) {
                 STATUS_EVENT_TYPE.HANDHELD_TRIGGER_EVENT -> {
-                    val event = rfidStatusEvents.StatusEventData.HandheldTriggerEventData.handheldEvent
-                    CoroutineScope(Dispatchers.IO).launch {
-                        when (event) {
-                            HANDHELD_TRIGGER_EVENT_TYPE.HANDHELD_TRIGGER_PRESSED -> {
-                                Log.d(TAG, "HANDHELD_TRIGGER_PRESSED")
-                                connectionInterface?.handleTriggerPress(true)
+                    // Use getter method to avoid NPE - HandheldTriggerEventData may be null in Kotlin
+                    val handheldData = rfidStatusEvents.StatusEventData.HandheldTriggerEventData
+                    if (handheldData != null) {
+                        val event = handheldData.handheldEvent
+                        CoroutineScope(Dispatchers.IO).launch {
+                            when (event) {
+                                HANDHELD_TRIGGER_EVENT_TYPE.HANDHELD_TRIGGER_PRESSED -> {
+                                    Log.d(TAG, "HANDHELD_TRIGGER_PRESSED")
+                                    connectionInterface?.handleTriggerPress(true)
+                                }
+                                HANDHELD_TRIGGER_EVENT_TYPE.HANDHELD_TRIGGER_RELEASED -> {
+                                    Log.d(TAG, "HANDHELD_TRIGGER_RELEASED")
+                                    connectionInterface?.handleTriggerPress(false)
+                                }
+                                else -> {}
                             }
-                            HANDHELD_TRIGGER_EVENT_TYPE.HANDHELD_TRIGGER_RELEASED -> {
-                                Log.d(TAG, "HANDHELD_TRIGGER_RELEASED")
-                                connectionInterface?.handleTriggerPress(false)
-                            }
-                            else -> {}
                         }
+                    } else {
+                        Log.w(TAG, "HandheldTriggerEventData is null in eventStatusNotify")
                     }
                 }
                 STATUS_EVENT_TYPE.DISCONNECTION_EVENT -> {

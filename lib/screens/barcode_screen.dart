@@ -37,6 +37,8 @@ class _BarcodeScreenState extends State<BarcodeScreen> {
         }
       case RfidConnectedEvent(:final message):
         setState(() => _status = message);
+      case RfidErrorEvent(:final message):
+        setState(() => _status = 'RFID Hata: $message');
       case RfidDisconnectedEvent():
         setState(() => _status = 'Reader disconnected');
       case MessageEvent(:final message):

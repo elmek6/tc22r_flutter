@@ -15,10 +15,7 @@ class RfidSampleApp extends StatelessWidget {
     return MaterialApp(
       title: 'RFID Sample',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
-        useMaterial3: true,
-      ),
+      theme: ThemeData(colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue), useMaterial3: true),
       home: const HomeScreen(),
     );
   }
@@ -58,14 +55,8 @@ class _HomeScreenState extends State<HomeScreen> {
         selectedIndex: _selectedIndex,
         onDestinationSelected: (i) => setState(() => _selectedIndex = i),
         destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.nfc),
-            label: 'RFID',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.qr_code_scanner),
-            label: 'Barcode',
-          ),
+          NavigationDestination(icon: Icon(Icons.nfc), label: 'RFID'),
+          NavigationDestination(icon: Icon(Icons.qr_code_scanner), label: 'Barcode'),
         ],
       ),
     );

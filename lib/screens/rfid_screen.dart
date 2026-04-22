@@ -1,158 +1,80 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter_hooks/flutter_hooks.dart';
 import '../services/zebra_service.dart';
 
-class RfidScreen extends StatefulWidget {
+// Hook: rfid_screen converted to HookWidget
+// Source: lib/screens/rfid_screen.dart
+class RfidScreen extends HookWidget {
   const RfidScreen({super.key});
 
   @override
-  State<RfidScreen> createState() => _RfidScreenState();
-}
-
-class _RfidScreenState extends State<RfidScreen> {
-  final _service = ZebraService.instance;
-  final _logScrollController = ScrollController();
-
-  final List<TagItem> _tags = [];
-  final List<_LogEntry> _log = [];
-
-  String _status = 'Initializing...';
-  Color _statusColor = Colors.grey.shade200;
-  bool _scanning = false;
-  bool _logExpanded = true;
-
-  int _powerIndex = 0;
-  int _maxPowerIndex = 270;
-
-  Timer? _clearTimer;
-  static const _clearTimeout = Duration(seconds: 2);
-
-  StreamSubscription<ZebraEvent>? _sub;
-
-  @override
-  void initState() {
-    super.initState();
-    _loadMaxPower();
-    _sub = _service.events.listen(_onEvent);
-  }
-
-  Future<void> _loadMaxPower() async {
-    final max = await _service.getMaxPowerIndex();
-    setState(() {
-      _maxPowerIndex = max;
-      _powerIndex = max;
-    });
-  }
-
-  void _addLog(String msg, {Color? color}) {
-    final now = TimeOfDay.now();
-    final ts = '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}:${DateTime.now().second.toString().padLeft(2, '0')}';
-    setState(() => _log.add(_LogEntry('$ts  $msg', color ?? Colors.black87)));
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_logScrollController.hasClients) {
-        _logScrollController.animateTo(
-          _logScrollController.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 200),
-          curve: Curves.easeOut,
-        );
-      }
-    });
-  }
-
-  void _onEvent(ZebraEvent event) {
-    switch (event) {
-      case RfidConnectedEvent(:final message):
-        setState(() {
-          _status = message.isEmpty ? 'Connected' : message;
-          _statusColor = Colors.green.shade100;
-        });
-        _addLog('RFID: $message', color: Colors.green.shade700);
-
-      case RfidDisconnectedEvent():
-        setState(() {
-          _status = 'Reader disconnected';
-          _statusColor = Colors.red.shade100;
-          _scanning = false;
-        });
-        _addLog('RFID: disconnected', color: Colors.red);
-
-      case TagDataEvent(:final tags):
-        _resetClearTimer();
-        _mergeTags(tags);
-        _addLog('Tags: ${tags.length} read (${tags.map((t) => t.epc).join(', ').substring(0, tags.map((t) => t.epc).join(', ').length.clamp(0, 40))}…)');
-
-      case TriggerPressEvent(:final pressed):
-        setState(() => _scanning = pressed);
-        _addLog(pressed ? 'Trigger PRESSED → inventory started' : 'Trigger RELEASED → inventory stopped',
-            color: Colors.blue.shade700);
-
-      case MessageEvent(:final message):
-        setState(() {
-          _status = message;
-          _statusColor = message.toLowerCase().contains('error') || message.toLowerCase().contains('fail')
-              ? Colors.orange.shade100
-              : Colors.grey.shade200;
-        });
-        _addLog('MSG: $message', color: Colors.orange.shade800);
-
-      case BarcodeDataEvent(:final data, :final label):
-        _addLog('BARCODE: $data (${label.isNotEmpty ? label : 'sym'})',
-            color: Colors.purple.shade700);
-
-    }
-  }
-
-  void _resetClearTimer() {
-    _clearTimer?.cancel();
-    _clearTimer = Timer(_clearTimeout, _clearTagList);
-  }
-
-  void _clearTagList() => setState(() => _tags.clear());
-
-  void _mergeTags(List<TagItem> incoming) {
-    setState(() {
-      for (final tag in incoming) {
-        final idx = _tags.indexWhere((t) => t.epc == tag.epc);
-        if (idx >= 0) {
-          _tags[idx] = tag;
-        } else {
-          _tags.add(tag);
-        }
-      }
-    });
-  }
-
-  Future<void> _startInventory() async {
-    setState(() {
-      _scanning = true;
-      _tags.clear();
-    });
-    _addLog('Start inventory (button)', color: Colors.blue);
-    await _service.startRfidInventory();
-  }
-
-  Future<void> _stopInventory() async {
-    _clearTimer?.cancel();
-    setState(() => _scanning = false);
-    _addLog('Stop inventory (button)', color: Colors.blue);
-    await _service.stopRfidInventory();
-  }
-
-  Future<void> _onPowerChanged(int index) async {
-    setState(() => _powerIndex = index);
-    await _service.setPower(index);
-  }
-
-  @override
-  void dispose() {
-    _clearTimer?.cancel();
-    _sub?.cancel();
-    _logScrollController.dispose();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
+    final service = ZebraService.instance;
+
+    // State management with useState
+    final tags = useState<List<TagItem>>([]);
+    final logEntries = useState<List<_LogEntry>>([]);
+    final status = useState<String>('Initializing...');
+    final statusColor = useState<Color>(Colors.grey.shade200);
+    final scanning = useState<bool>(false);
+    final logExpanded = useState<bool>(true);
+    final powerIndex = useState<int>(0);
+    final maxPowerIndex = useState<int>(270);
+
+    // useRef for mutable values (ScrollController, Timer)
+    final scrollController = useRef(ScrollController());
+    final clearTimer = useState<Timer?>(null);
+
+    // useEffect for lifecycle - setup stream subscription
+    useEffect(() {
+      // Load max power on mount
+      service.getMaxPowerIndex().then((max) {
+        powerIndex.value = max;
+        maxPowerIndex.value = max;
+      });
+
+      // Subscribe to events
+      final sub = service.events.listen((event) {
+        _onEvent(event, tags, logEntries, status, statusColor, scanning, clearTimer);
+      });
+
+      // Cleanup on unmount
+      return () {
+        sub.cancel();
+        clearTimer.value?.cancel();
+        scrollController.value.dispose();
+      };
+    }, []);
+
+    // Auto-scroll log when new entries added
+    useEffect(() {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (scrollController.value.hasClients) {
+          scrollController.value.animateTo(scrollController.value.position.maxScrollExtent, duration: const Duration(milliseconds: 200), curve: Curves.easeOut);
+        }
+      });
+    }, [logEntries.value.length]);
+
+    void startInventory() async {
+      scanning.value = true;
+      tags.value = [];
+      _addLog(logEntries, 'Start inventory (button)', Colors.blue);
+      await service.startRfidInventory();
+    }
+
+    void stopInventory() async {
+      clearTimer.value?.cancel();
+      scanning.value = false;
+      _addLog(logEntries, 'Stop inventory (button)', Colors.blue);
+      await service.stopRfidInventory();
+    }
+
+    void onPowerChanged(int index) async {
+      powerIndex.value = index;
+      await service.setPower(index);
+    }
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('RFID Inventory'),
@@ -160,7 +82,7 @@ class _RfidScreenState extends State<RfidScreen> {
           Center(
             child: Padding(
               padding: const EdgeInsets.only(right: 12),
-              child: Text('${_tags.length} tags', style: const TextStyle(fontSize: 14)),
+              child: Text('${tags.value.length} tags', style: const TextStyle(fontSize: 14)),
             ),
           ),
         ],
@@ -171,9 +93,9 @@ class _RfidScreenState extends State<RfidScreen> {
           AnimatedContainer(
             duration: const Duration(milliseconds: 300),
             width: double.infinity,
-            color: _statusColor,
+            color: statusColor.value,
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            child: Text(_status, style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis),
+            child: Text(status.value, style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis),
           ),
 
           // ── Power slider ───────────────────────────────────────────────
@@ -184,16 +106,16 @@ class _RfidScreenState extends State<RfidScreen> {
                 const Text('Power:', style: TextStyle(fontSize: 13)),
                 Expanded(
                   child: Slider(
-                    value: _powerIndex.toDouble(),
+                    value: powerIndex.value.toDouble(),
                     min: 0,
-                    max: _maxPowerIndex.toDouble(),
-                    divisions: _maxPowerIndex > 0 ? _maxPowerIndex : 1,
-                    onChanged: _scanning ? null : (v) => _onPowerChanged(v.round()),
+                    max: maxPowerIndex.value.toDouble(),
+                    divisions: maxPowerIndex.value > 0 ? maxPowerIndex.value : 1,
+                    onChanged: scanning.value ? null : (v) => onPowerChanged(v.round()),
                   ),
                 ),
                 SizedBox(
                   width: 36,
-                  child: Text('$_powerIndex', style: const TextStyle(fontSize: 13), textAlign: TextAlign.right),
+                  child: Text('${powerIndex.value}', style: const TextStyle(fontSize: 13), textAlign: TextAlign.right),
                 ),
               ],
             ),
@@ -205,19 +127,13 @@ class _RfidScreenState extends State<RfidScreen> {
             child: Row(
               children: [
                 Expanded(
-                  child: ElevatedButton(
-                    onPressed: _scanning ? null : _startInventory,
-                    child: const Text('Start'),
-                  ),
+                  child: ElevatedButton(onPressed: scanning.value ? null : startInventory, child: const Text('Start')),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
                   child: ElevatedButton(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.red.shade400,
-                      foregroundColor: Colors.white,
-                    ),
-                    onPressed: _scanning ? _stopInventory : null,
+                    style: ElevatedButton.styleFrom(backgroundColor: Colors.red.shade400, foregroundColor: Colors.white),
+                    onPressed: scanning.value ? stopInventory : null,
                     child: const Text('Stop'),
                   ),
                 ),
@@ -229,10 +145,8 @@ class _RfidScreenState extends State<RfidScreen> {
           Padding(
             padding: const EdgeInsets.only(bottom: 4),
             child: Text(
-              _scanning
-                  ? '🔴 Scanning… (trigger release = stop)'
-                  : 'Start button or physical trigger starts inventory',
-              style: TextStyle(fontSize: 11, color: _scanning ? Colors.red : Colors.grey),
+              scanning.value ? '🔴 Scanning… (trigger release = stop)' : 'Start button or physical trigger starts inventory',
+              style: TextStyle(fontSize: 11, color: scanning.value ? Colors.red : Colors.grey),
             ),
           ),
 
@@ -241,24 +155,18 @@ class _RfidScreenState extends State<RfidScreen> {
           // ── Tag list (flexible) ────────────────────────────────────────
           Expanded(
             flex: 3,
-            child: _tags.isEmpty
+            child: tags.value.isEmpty
                 ? Center(
-                    child: Text(
-                      _scanning ? 'Scanning for tags…' : 'No tags read yet',
-                      style: const TextStyle(color: Colors.grey),
-                    ),
+                    child: Text(scanning.value ? 'Scanning for tags…' : 'No tags read yet', style: const TextStyle(color: Colors.grey)),
                   )
                 : ListView.builder(
-                    itemCount: _tags.length,
+                    itemCount: tags.value.length,
                     itemBuilder: (_, i) {
-                      final tag = _tags[i];
+                      final tag = tags.value[i];
                       return ListTile(
                         dense: true,
                         leading: const Icon(Icons.nfc, size: 18),
-                        title: Text(
-                          tag.epc,
-                          style: const TextStyle(fontFamily: 'monospace', fontSize: 13),
-                        ),
+                        title: Text(tag.epc, style: const TextStyle(fontFamily: 'monospace', fontSize: 13)),
                         trailing: Text('${tag.rssi} dBm', style: const TextStyle(fontSize: 12)),
                       );
                     },
@@ -268,44 +176,41 @@ class _RfidScreenState extends State<RfidScreen> {
           // ── Event log (expandable) ─────────────────────────────────────
           const Divider(height: 1),
           InkWell(
-            onTap: () => setState(() => _logExpanded = !_logExpanded),
+            onTap: () => logExpanded.value = !logExpanded.value,
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
               child: Row(
                 children: [
-                  Icon(_logExpanded ? Icons.expand_more : Icons.expand_less, size: 16),
+                  Icon(logExpanded.value ? Icons.expand_more : Icons.expand_less, size: 16),
                   const SizedBox(width: 6),
-                  Text('Event Log (${_log.length})',
-                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                  Text('Event Log (${logEntries.value.length})', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
                   const Spacer(),
-                  if (_log.isNotEmpty)
+                  if (logEntries.value.isNotEmpty)
                     GestureDetector(
-                      onTap: () => setState(() => _log.clear()),
+                      onTap: () => logEntries.value = [],
                       child: const Text('clear', style: TextStyle(fontSize: 11, color: Colors.grey)),
                     ),
                 ],
               ),
             ),
           ),
-          if (_logExpanded)
+          if (logExpanded.value)
             Expanded(
               flex: 2,
-              child: _log.isEmpty
-                  ? const Center(child: Text('No events yet', style: TextStyle(color: Colors.grey, fontSize: 12)))
+              child: logEntries.value.isEmpty
+                  ? const Center(
+                      child: Text('No events yet', style: TextStyle(color: Colors.grey, fontSize: 12)),
+                    )
                   : ListView.builder(
-                      controller: _logScrollController,
-                      itemCount: _log.length,
+                      controller: scrollController.value,
+                      itemCount: logEntries.value.length,
                       itemBuilder: (_, i) {
-                        final entry = _log[i];
+                        final entry = logEntries.value[i];
                         return Padding(
                           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 1),
                           child: Text(
                             entry.message,
-                            style: TextStyle(
-                              fontSize: 11,
-                              fontFamily: 'monospace',
-                              color: entry.color,
-                            ),
+                            style: TextStyle(fontSize: 11, fontFamily: 'monospace', color: entry.color),
                           ),
                         );
                       },
@@ -315,6 +220,78 @@ class _RfidScreenState extends State<RfidScreen> {
       ),
     );
   }
+}
+
+// Event handler function
+// Hook: _onEvent processes ZebraEvent and updates state via ValueNotifier
+void _onEvent(
+  ZebraEvent event,
+  ValueNotifier<List<TagItem>> tagsNotifier,
+  ValueNotifier<List<_LogEntry>> logEntries,
+  ValueNotifier<String> status,
+  ValueNotifier<Color> statusColor,
+  ValueNotifier<bool> scanning,
+  ValueNotifier<Timer?> clearTimer,
+) {
+  const clearTimeout = Duration(seconds: 2);
+
+  if (event is RfidConnectedEvent) {
+    status.value = event.message.isEmpty ? 'Connected' : event.message;
+    statusColor.value = Colors.green.shade100;
+    _addLog(logEntries, 'RFID: ${event.message}', Colors.green.shade700);
+  } else if (event is RfidErrorEvent) {
+    status.value = event.message;
+    statusColor.value = Colors.red.shade100;
+    scanning.value = false;
+    _addLog(logEntries, 'RFID HATA: ${event.message}', Colors.red);
+  } else if (event is RfidDisconnectedEvent) {
+    status.value = 'Reader disconnected';
+    statusColor.value = Colors.red.shade100;
+    scanning.value = false;
+    _addLog(logEntries, 'RFID: disconnected', Colors.red);
+  } else if (event is TagDataEvent) {
+    // REMOVED: Tags were being cleared every 2 seconds - now tags persist until manually cleared
+    // Tags accumulate as they are read, user can see all scanned tags
+    _mergeTags(tagsNotifier, event.tags);
+    final epcList = event.tags.map((t) => t.epc).join(', ');
+    final shortEpc = epcList.length > 40 ? '${epcList.substring(0, 40)}…' : epcList;
+    _addLog(logEntries, 'Tags: ${event.tags.length} read ($shortEpc)', Colors.green.shade700);
+  } else if (event is TriggerPressEvent) {
+    scanning.value = event.pressed;
+    _addLog(logEntries, event.pressed ? 'Trigger PRESSED → inventory started' : 'Trigger RELEASED → inventory stopped', Colors.blue.shade700);
+  } else if (event is MessageEvent) {
+    status.value = event.message;
+    statusColor.value = event.message.toLowerCase().contains('error') || event.message.toLowerCase().contains('fail')
+        ? Colors.orange.shade100
+        : Colors.grey.shade200;
+    _addLog(logEntries, 'MSG: ${event.message}', Colors.orange.shade800);
+  } else if (event is BarcodeDataEvent) {
+    _addLog(logEntries, 'BARCODE: ${event.data} (${event.label.isNotEmpty ? event.label : 'sym'})', Colors.purple.shade700);
+  }
+}
+
+void _resetClearTimer(ValueNotifier<Timer?> clearTimer, Duration timeout, void Function() onClear) {
+  clearTimer.value?.cancel();
+  clearTimer.value = Timer(timeout, onClear);
+}
+
+void _mergeTags(ValueNotifier<List<TagItem>> tagsNotifier, List<TagItem> incoming) {
+  final currentTags = List<TagItem>.from(tagsNotifier.value);
+  for (final tag in incoming) {
+    final idx = currentTags.indexWhere((t) => t.epc == tag.epc);
+    if (idx >= 0) {
+      currentTags[idx] = tag;
+    } else {
+      currentTags.add(tag);
+    }
+  }
+  tagsNotifier.value = currentTags;
+}
+
+void _addLog(ValueNotifier<List<_LogEntry>> logEntries, String msg, Color color) {
+  final now = TimeOfDay.now();
+  final ts = '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}:${DateTime.now().second.toString().padLeft(2, '0')}';
+  logEntries.value = [...logEntries.value, _LogEntry('$ts  $msg', color)];
 }
 
 class _LogEntry {

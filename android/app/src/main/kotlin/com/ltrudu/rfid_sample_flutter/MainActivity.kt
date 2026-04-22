@@ -28,12 +28,12 @@ class MainActivity : FlutterActivity() {
 
     private val rfidHandler = RfidHandler()
 
-    // scannerHandler is null on EM45 (no external scanner port), same guard as original sample
-    private var scannerHandler: ScannerHandler? = null
-
-    // DataWedge fallback: used when DSC SDK finds no scanner (mirrors ScannerActivity.java)
+    // NOTE: ScannerHandler (DCS Scanner SDK) removed - it conflicts with RFID SDK
+    // Barcode scanning now uses DataWedge Intent API only
+    // See: RFID_API_COMMAND_TIMEOUT caused by ScannerSDK holding USB endpoints
+    
+    // DataWedge: used for barcode scanning (mirrors ScannerActivity.java)
     private var dataWedgeHandler: DataWedgeHandler? = null
-    private var isUsingDataWedge = false
 
     private var eventSink: EventChannel.EventSink? = null
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -80,25 +80,14 @@ class MainActivity : FlutterActivity() {
                         result.success(null)
                     }
 
-                    // Soft-trigger: DSC SDK first, DataWedge fallback second
-                    // mirrors ScannerActivity.java btScan onClick + TriggerDWScanner()
+                    // Soft-trigger: DataWedge only (ScannerHandler removed due to RFID conflict)
                     "startBarcodeScan" -> {
-                        when {
-                            scannerHandler?.hasDetectedScanner() == true ->
-                                scannerHandler!!.pullTrigger()
-                            isUsingDataWedge ->
-                                dataWedgeHandler?.pullTrigger()
-                        }
+                        dataWedgeHandler?.pullTrigger()
                         result.success(null)
                     }
 
                     "stopBarcodeScan" -> {
-                        when {
-                            scannerHandler?.hasDetectedScanner() == true ->
-                                scannerHandler!!.releaseTrigger()
-                            isUsingDataWedge ->
-                                dataWedgeHandler?.releaseTrigger()
-                        }
+                        dataWedgeHandler?.releaseTrigger()
                         result.success(null)
                     }
 
@@ -142,44 +131,60 @@ class MainActivity : FlutterActivity() {
             }
         }
 
+        // CRITICAL: Disable DataWedge barcode scanner plugin BEFORE RFID connects
+        // This prevents conflicts on the shared USB transport
+        disableDataWedgeBarcode()
+
         rfidHandler.onCreate(this, rfidInterface)
         // Activity is already resumed when Flutter calls "initialize", so trigger onResume manually
         rfidHandler.onResume(rfidInterface)
 
-        val model = Build.MODEL
-        // EM45 has no external scanner port – skip ScannerHandler the same way the original does
-        if (!model.contains("EM45", ignoreCase = true)) {
-            scannerHandler = ScannerHandler(this)
-        }
-
-        // If DSC SDK found no scanner, fall back to DataWedge (mirrors ScannerActivity.java)
-        if (scannerHandler?.hasDetectedScanner() != true) {
-            Log.d(TAG, "No DSC SDK scanner – initializing DataWedge fallback")
-            dataWedgeHandler = DataWedgeHandler(this)
-            dataWedgeHandler!!.initialize(object : DataWedgeHandler.DataWedgeHandlerInterface {
-                override fun onBarcodeData(data: String, typology: String) {
-                    sendEvent(mapOf("type" to "barcodeData", "data" to data, "symbology" to typology))
-                }
-                override fun onProfileReady() {
-                    Log.d(TAG, "DataWedge profile confirmed ready")
-                }
-                override fun onProfileError(error: String) {
-                    Log.w(TAG, "DataWedge profile error (non-fatal): $error")
-                }
-            })
-            // Profile is created/updated async, but DataWedge will activate it as soon as
-            // the app is foreground. Register receiver immediately so scans are not missed.
-            isUsingDataWedge = true
-            dataWedgeHandler!!.startReceive()
-        }
+        // Initialize DataWedge for barcode scanning (after RFID is connected)
+        // NOTE: ScannerHandler (DCS Scanner SDK) removed because it conflicts with RFID SDK
+        Log.d(TAG, "Initializing DataWedge for barcode scanning")
+        dataWedgeHandler = DataWedgeHandler(this)
+        dataWedgeHandler!!.initialize(object : DataWedgeHandler.DataWedgeHandlerInterface {
+            override fun onBarcodeData(data: String, typology: String) {
+                sendEvent(mapOf("type" to "barcodeData", "data" to data, "symbology" to typology))
+            }
+            override fun onProfileReady() {
+                Log.d(TAG, "DataWedge profile confirmed ready")
+                // Re-enable barcode after RFID is connected
+                enableDataWedgeBarcode()
+            }
+            override fun onProfileError(error: String) {
+                Log.w(TAG, "DataWedge profile error (non-fatal): $error")
+            }
+        })
+        dataWedgeHandler!!.startReceive()
 
         initialized = true
+    }
+
+    // Disable DataWedge barcode plugin before RFID connects
+    private fun disableDataWedgeBarcode() {
+        Log.d(TAG, "Disabling DataWedge barcode plugin before RFID connect")
+        val dwIntent = android.content.Intent()
+        dwIntent.action = "com.symbol.datawedge.api.ACTION"
+        dwIntent.putExtra("com.symbol.datawedge.api.SCANNER_INPUT_PLUGIN", "DISABLE_PLUGIN")
+        sendBroadcast(dwIntent)
+    }
+
+    // Enable DataWedge barcode plugin after RFID is connected
+    private fun enableDataWedgeBarcode() {
+        Log.d(TAG, "Enabling DataWedge barcode plugin after RFID connect")
+        val dwIntent = android.content.Intent()
+        dwIntent.action = "com.symbol.datawedge.api.ACTION"
+        dwIntent.putExtra("com.symbol.datawedge.api.SCANNER_INPUT_PLUGIN", "ENABLE_PLUGIN")
+        sendBroadcast(dwIntent)
     }
 
     private fun buildRfidInterface(): RfidHandler.RfidHandlerInterface {
         return object : RfidHandler.RfidHandlerInterface {
             override fun onReaderConnected(message: String) {
-                sendEvent(mapOf("type" to "rfidConnected", "message" to message))
+                val success = message.startsWith("Connected")
+                val type = if (success) "rfidConnected" else "rfidError"
+                sendEvent(mapOf("type" to type, "message" to message))
             }
             override fun onReaderDisconnected() {
                 sendEvent(mapOf("type" to "rfidDisconnected"))
@@ -198,14 +203,6 @@ class MainActivity : FlutterActivity() {
                 if (press) CoroutineScope(Dispatchers.IO).launch { rfidHandler.performInventory() }
                 else CoroutineScope(Dispatchers.IO).launch { rfidHandler.stopInventory() }
                 sendEvent(mapOf("type" to "triggerPress", "pressed" to press))
-            }
-        }
-    }
-
-    private fun buildScannerInterface(): ScannerHandler.ScannerHandlerInterface {
-        return object : ScannerHandler.ScannerHandlerInterface {
-            override fun onBarcodeData(data: String, symbology: Int) {
-                sendEvent(mapOf("type" to "barcodeData", "data" to data, "symbology" to symbology))
             }
         }
     }
@@ -229,20 +226,12 @@ class MainActivity : FlutterActivity() {
         super.onResume()
         if (!initialized) return
         rfidHandler.onResume(buildRfidInterface())
-        if (scannerHandler?.hasDetectedScanner() == true) {
-            scannerHandler!!.onResume(buildScannerInterface())
-        } else if (isUsingDataWedge) {
-            dataWedgeHandler?.startReceive()
-        }
+        dataWedgeHandler?.startReceive()
     }
 
     override fun onPause() {
         rfidHandler.onPause()
-        if (scannerHandler?.hasDetectedScanner() == true) {
-            scannerHandler!!.onPause()
-        } else if (isUsingDataWedge) {
-            dataWedgeHandler?.stopReceive()
-        }
+        dataWedgeHandler?.stopReceive()
         super.onPause()
     }
 

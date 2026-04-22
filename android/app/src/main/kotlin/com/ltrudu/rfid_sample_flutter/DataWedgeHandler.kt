@@ -46,7 +46,7 @@ class DataWedgeHandler(private val context: Context) {
         val profileConfig = Bundle().apply {
             putString("PROFILE_NAME", packageName)
             putString("PROFILE_ENABLED", "true")
-            putString("CONFIG_MODE", "CREATE_IF_NOT_EXIST")
+            putString("CONFIG_MODE", "OVERWRITE")
 
             // Bind this profile to our package
             val appConfig = Bundle().apply {
@@ -67,12 +67,14 @@ class DataWedgeHandler(private val context: Context) {
                 })
             }
 
-            // Scanner plugin: auto-select, enabled
+            // Scanner plugin: auto-select, disabled initially.
+            // RFID SDK must connect first; enableDataWedgeBarcode() enables it afterward.
+            // Starting with "true" here would override the DISABLE_PLUGIN sent just before.
             val scannerPlugin = Bundle().apply {
                 putString("PLUGIN_NAME", "BARCODE")
                 putString("RESET_CONFIG", "true")
                 putBundle("PARAM_LIST", Bundle().apply {
-                    putString("scanner_input_enabled", "true")
+                    putString("scanner_input_enabled", "false")
                     putString("scanner_selection", "auto")
                 })
             }

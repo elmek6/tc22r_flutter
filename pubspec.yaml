@@ -11,6 +11,9 @@ dependencies:
   flutter:
     sdk: flutter
 
+  # Flutter Hooks - React-style state management with useState, useEffect, etc.
+  flutter_hooks: ^0.20.5
+
   cupertino_icons: ^1.0.8
 
 dev_dependencies:

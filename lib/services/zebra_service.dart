@@ -11,6 +11,11 @@ class RfidConnectedEvent extends ZebraEvent {
 
 class RfidDisconnectedEvent extends ZebraEvent {}
 
+class RfidErrorEvent extends ZebraEvent {
+  final String message;
+  RfidErrorEvent(this.message);
+}
+
 class TagDataEvent extends ZebraEvent {
   final List<TagItem> tags;
   TagDataEvent(this.tags);
@@ -70,6 +75,8 @@ class ZebraService {
         _controller.add(RfidConnectedEvent(map['message'] as String? ?? ''));
       case 'rfidDisconnected':
         _controller.add(RfidDisconnectedEvent());
+      case 'rfidError':
+        _controller.add(RfidErrorEvent(map['message'] as String? ?? ''));
       case 'tagData':
         final rawTags = map['tags'] as List? ?? [];
         final tags = rawTags.map((t) {
