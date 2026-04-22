@@ -243,7 +243,7 @@ void _onEvent(
     status.value = event.message;
     statusColor.value = Colors.red.shade100;
     scanning.value = false;
-    _addLog(logEntries, 'RFID HATA: ${event.message}', Colors.red);
+    _addLog(logEntries, 'RFID ERROR: ${event.message}', Colors.red);
   } else if (event is RfidDisconnectedEvent) {
     status.value = 'Reader disconnected';
     statusColor.value = Colors.red.shade100;

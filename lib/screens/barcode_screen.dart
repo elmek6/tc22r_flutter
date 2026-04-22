@@ -38,7 +38,7 @@ class _BarcodeScreenState extends State<BarcodeScreen> {
       case RfidConnectedEvent(:final message):
         setState(() => _status = message);
       case RfidErrorEvent(:final message):
-        setState(() => _status = 'RFID Hata: $message');
+        setState(() => _status = 'RFID Error: $message');
       case RfidDisconnectedEvent():
         setState(() => _status = 'Reader disconnected');
       case MessageEvent(:final message):
@@ -53,11 +53,7 @@ class _BarcodeScreenState extends State<BarcodeScreen> {
     // Scroll to bottom after the frame is built (mirrors updateAndScrollDownTextView)
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scrollController.hasClients) {
-        _scrollController.animateTo(
-          _scrollController.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeOut,
-        );
+        _scrollController.animateTo(_scrollController.position.maxScrollExtent, duration: const Duration(milliseconds: 300), curve: Curves.easeOut);
       }
     });
   }
@@ -86,13 +82,7 @@ class _BarcodeScreenState extends State<BarcodeScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Barcode Scanner'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.delete_outline),
-            tooltip: 'Clear results',
-            onPressed: _results.isEmpty ? null : _clearResults,
-          ),
-        ],
+        actions: [IconButton(icon: const Icon(Icons.delete_outline), tooltip: 'Clear results', onPressed: _results.isEmpty ? null : _clearResults)],
       ),
       body: Column(
         children: [
@@ -102,11 +92,7 @@ class _BarcodeScreenState extends State<BarcodeScreen> {
               width: double.infinity,
               color: Colors.grey.shade200,
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-              child: Text(
-                _status,
-                style: const TextStyle(fontSize: 12),
-                overflow: TextOverflow.ellipsis,
-              ),
+              child: Text(_status, style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis),
             ),
 
           // Scan button (soft trigger)
@@ -127,10 +113,7 @@ class _BarcodeScreenState extends State<BarcodeScreen> {
             ),
           ),
 
-          const Text(
-            'Physical trigger button also activates the scanner',
-            style: TextStyle(fontSize: 11, color: Colors.grey),
-          ),
+          const Text('Physical trigger button also activates the scanner', style: TextStyle(fontSize: 11, color: Colors.grey)),
 
           const SizedBox(height: 8),
           const Divider(height: 1),
@@ -139,10 +122,7 @@ class _BarcodeScreenState extends State<BarcodeScreen> {
           Expanded(
             child: _results.isEmpty
                 ? const Center(
-                    child: Text(
-                      'No barcodes scanned yet',
-                      style: TextStyle(color: Colors.grey),
-                    ),
+                    child: Text('No barcodes scanned yet', style: TextStyle(color: Colors.grey)),
                   )
                 : ListView.builder(
                     controller: _scrollController,
@@ -150,13 +130,7 @@ class _BarcodeScreenState extends State<BarcodeScreen> {
                     itemBuilder: (_, i) => ListTile(
                       dense: true,
                       leading: const Icon(Icons.qr_code, size: 18),
-                      title: Text(
-                        _results[i],
-                        style: const TextStyle(
-                          fontFamily: 'monospace',
-                          fontSize: 13,
-                        ),
-                      ),
+                      title: Text(_results[i], style: const TextStyle(fontFamily: 'monospace', fontSize: 13)),
                     ),
                   ),
           ),
