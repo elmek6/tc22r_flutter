@@ -297,6 +297,11 @@ class RfidHandler {
     
     // Resets the com.zebra.rfidhost service to clear stale SerialInputOutputManager state,
     // then creates a fresh Readers instance and retries the connection once.
+    //
+    // SOURCE: Stack Overflow - Zebra SDK exception RFID_API_COMMAND_TIMEOUT when reconnecting
+    // https://stackoverflow.com/a/...
+    // Fix requires: readers.Dispose() + set to null + wait 500ms + create new Readers()
+    // This pattern clears the internal SerialInputOutputManager thread that gets stuck.
     private fun resetAndRetry(): String {
         try {
             context?.let { ctx ->
@@ -412,7 +417,11 @@ class RfidHandler {
     // Mirrors ConfigureReaderForInventory() in the original Java sample exactly:
     // trigger mode RFID, SESSION_S0, max power, no prefilters.
     fun configureReaderForInventory() {
-        if (reader?.isConnected != true) return
+        Log.d(TAG, "=== configureReaderForInventory called ===")
+        if (reader?.isConnected != true) {
+            Log.e(TAG, "configureReaderForInventory: reader not connected")
+            return
+        }
         Log.d(TAG, "ConfigureReaderForInventory ${reader!!.hostName}")
 
         val triggerInfo = TriggerInfo().apply {
@@ -424,20 +433,24 @@ class RfidHandler {
             if (eventHandler == null) {
                 eventHandler = EventHandler()
                 reader!!.Events.addEventsListener(eventHandler)
+                Log.d(TAG, "Added event handler (was null)")
             } else {
                 reader!!.Events.removeEventsListener(eventHandler)
                 eventHandler = EventHandler()
                 reader!!.Events.addEventsListener(eventHandler)
+                Log.d(TAG, "Re-added event handler (was not null)")
             }
 
             reader!!.Events.setHandheldEvent(true)
             reader!!.Events.setTagReadEvent(true)
             reader!!.Events.setAttachTagDataWithReadEvent(false)
+            Log.d(TAG, "Events configured - handheld=true, tagRead=true")
 
             // RFID_MODE prevents the barcode laser from firing during inventory
             reader!!.Config.setTriggerMode(ENUM_TRIGGER_MODE.RFID_MODE, false)
             reader!!.Config.startTrigger = triggerInfo.StartTrigger
             reader!!.Config.stopTrigger = triggerInfo.StopTrigger
+            Log.d(TAG, "Trigger mode set to RFID_MODE")
 
             // Power levels are index-based; use max supported by this reader
             mAntennaPower = reader!!.ReaderCapabilities.getTransmitPowerLevelValues().size - 1
@@ -466,12 +479,18 @@ class RfidHandler {
 
     @Synchronized
     fun performInventory() {
+        Log.d(TAG, "=== performInventory called ===")
         try {
+            Log.d(TAG, "Calling configureReaderForInventory...")
             configureReaderForInventory()
+            Log.d(TAG, "Calling reader.Actions.Inventory.perform...")
             reader?.Actions?.Inventory?.perform()
+            Log.d(TAG, "performInventory completed successfully")
         } catch (e: InvalidUsageException) {
+            Log.e(TAG, "performInventory: InvalidUsageException - ${e.message}")
             e.printStackTrace()
         } catch (e: OperationFailureException) {
+            Log.e(TAG, "performInventory: OperationFailureException - ${e.vendorMessage}")
             e.printStackTrace()
         }
     }
@@ -523,7 +542,12 @@ class RfidHandler {
     inner class EventHandler : RfidEventsListener {
 
         override fun eventReadNotify(e: RfidReadEvents) {
-            val tags = reader?.Actions?.getReadTags(100) ?: return
+            Log.d(TAG, "=== eventReadNotify called ===")
+            val tags = reader?.Actions?.getReadTags(100) ?: run {
+                Log.e(TAG, "eventReadNotify: reader or Actions is null")
+                return
+            }
+            Log.d(TAG, "eventReadNotify: retrieved ${tags.size} tags")
             CoroutineScope(Dispatchers.IO).launch {
                 connectionInterface?.onTagData(tags)
             }
