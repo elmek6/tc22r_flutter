@@ -7,10 +7,16 @@ import android.content.IntentFilter
 import android.os.Bundle
 import android.util.Log
 
-// DataWedge fallback for barcode scanning when DSC SDK finds no scanner.
-// Uses raw DataWedge intents (SET_CONFIG + broadcast receiver) — no content provider
-// permission needed, unlike CreateProfileHelper which queries the content provider.
-// Profile is persistent on the device; CREATE_IF_NOT_EXIST means re-runs are safe.
+// DataWedge handler for Zebra TC22R barcode scanning.
+// Architecture follows Zebra's prescribed sequence:
+//   1. SET_CONFIG with CREATE_IF_NOT_EXIST  -> profile is persisted on device
+//   2. SWITCH_TO_PROFILE in onResume        -> required on Android 14 (DataWedge
+//      reverts to default profile when app is backgrounded)
+//   3. Scan receiver registered with RECEIVER_EXPORTED, no DEFAULT category
+//      (DataWedge sends barcode broadcasts WITHOUT android.intent.category.DEFAULT)
+//   4. ENABLE_PLUGIN sent unconditionally with delay -- the SET_CONFIG result
+//      broadcast is unreliable per Zebra's own documentation, so we never wait
+//      for onProfileReady() before enabling the scanner.
 class DataWedgeHandler(private val context: Context) {
 
     companion object {
@@ -34,19 +40,19 @@ class DataWedgeHandler(private val context: Context) {
     private var profileReady = false
 
     // Creates a DataWedge profile for this package via SET_CONFIG intent.
-    // No content provider permission needed – intent is fire-and-forget with result callback.
+    // CONFIG_MODE = CREATE_IF_NOT_EXIST so re-runs do not destroy a working profile.
     fun initialize(cb: DataWedgeHandlerInterface) {
         callback = cb
         val packageName = context.packageName
 
-        // Listen for SET_CONFIG result
+        // Listen for SET_CONFIG result (best-effort; result delivery is unreliable)
         registerResultReceiver(packageName)
 
         // Build profile config bundle
         val profileConfig = Bundle().apply {
             putString("PROFILE_NAME", packageName)
             putString("PROFILE_ENABLED", "true")
-            putString("CONFIG_MODE", "OVERWRITE")
+            putString("CONFIG_MODE", "CREATE_IF_NOT_EXIST")
 
             // Bind this profile to our package
             val appConfig = Bundle().apply {
@@ -62,19 +68,19 @@ class DataWedgeHandler(private val context: Context) {
                 putBundle("PARAM_LIST", Bundle().apply {
                     putString("intent_output_enabled", "true")
                     putString("intent_action", "$packageName.RECVR")
-                    putString("intent_category", "android.intent.category.DEFAULT")
+                    putString("intent_category", "")
                     putString("intent_delivery", "2") // 2 = BROADCAST
                 })
             }
 
-            // Scanner plugin: auto-select, disabled initially.
-            // RFID SDK must connect first; enableDataWedgeBarcode() enables it afterward.
-            // Starting with "true" here would override the DISABLE_PLUGIN sent just before.
+            // Scanner plugin: enabled, auto-select.
+            // The SET_CONFIG result is unreliable; do NOT rely on onProfileReady()
+            // to enable the scanner later. Enable it directly in the profile.
             val scannerPlugin = Bundle().apply {
                 putString("PLUGIN_NAME", "BARCODE")
                 putString("RESET_CONFIG", "true")
                 putBundle("PARAM_LIST", Bundle().apply {
-                    putString("scanner_input_enabled", "false")
+                    putString("scanner_input_enabled", "true")
                     putString("scanner_selection", "auto")
                 })
             }
@@ -88,17 +94,7 @@ class DataWedgeHandler(private val context: Context) {
                 })
             }
 
-            // RFID plugin: disabled so DataWedge releases the TC22r serial port,
-            // allowing the RFID SDK3 (rfidhost service) to take exclusive control.
-            val rfidPlugin = Bundle().apply {
-                putString("PLUGIN_NAME", "RFID")
-                putString("RESET_CONFIG", "true")
-                putBundle("PARAM_LIST", Bundle().apply {
-                    putString("rfid_input_enabled", "false")
-                })
-            }
-
-            putParcelableArray("PLUGIN_CONFIG", arrayOf(intentPlugin, scannerPlugin, keystrokePlugin, rfidPlugin))
+            putParcelableArray("PLUGIN_CONFIG", arrayOf(intentPlugin, scannerPlugin, keystrokePlugin))
         }
 
         val intent = Intent().apply {
@@ -108,6 +104,40 @@ class DataWedgeHandler(private val context: Context) {
         }
         context.sendBroadcast(intent)
         Log.d(TAG, "SET_CONFIG sent for profile: $packageName")
+    }
+
+    // SWITCH_TO_PROFILE -- mandatory on Android 14: DataWedge reverts to the
+    // default profile when the app goes to background; switching back must be
+    // done explicitly on every onResume(). Profile name = package name.
+    fun switchToProfile() {
+        val packageName = context.packageName
+        val intent = Intent().apply {
+            action = DW_ACTION
+            putExtra("com.symbol.datawedge.api.SWITCH_TO_PROFILE", packageName)
+        }
+        context.sendBroadcast(intent)
+        Log.d(TAG, "SWITCH_TO_PROFILE=$packageName")
+    }
+
+    // ENABLE_PLUGIN -- the scanner plugin must be enabled for the active profile
+    // before scanning works. Sent unconditionally (not gated on the unreliable
+    // SET_CONFIG result broadcast).
+    fun enableScannerPlugin() {
+        val intent = Intent().apply {
+            action = DW_ACTION
+            putExtra("com.symbol.datawedge.api.SCANNER_INPUT_PLUGIN", "ENABLE_PLUGIN")
+        }
+        context.sendBroadcast(intent)
+        Log.d(TAG, "SCANNER_INPUT_PLUGIN=ENABLE_PLUGIN")
+    }
+
+    fun disableScannerPlugin() {
+        val intent = Intent().apply {
+            action = DW_ACTION
+            putExtra("com.symbol.datawedge.api.SCANNER_INPUT_PLUGIN", "DISABLE_PLUGIN")
+        }
+        context.sendBroadcast(intent)
+        Log.d(TAG, "SCANNER_INPUT_PLUGIN=DISABLE_PLUGIN")
     }
 
     private fun registerResultReceiver(packageName: String) {
@@ -137,25 +167,25 @@ class DataWedgeHandler(private val context: Context) {
         }
     }
 
-    // Register the broadcast receiver and start listening for scan results.
-    // Call from Activity.onResume().
+    // Register the broadcast receiver for barcode scan results.
+    // IMPORTANT: NO addCategory() -- DataWedge does not include
+    // android.intent.category.DEFAULT in barcode broadcasts; adding it
+    // would silently filter out every scan event.
     fun startReceive() {
         val packageName = context.packageName
         if (mScanReceiver == null) {
             mScanReceiver = object : BroadcastReceiver() {
                 override fun onReceive(ctx: Context, intent: Intent) {
-                    // DataWedge delivers barcode data via these standard extras
+                    Log.d(TAG, "scan broadcast received action=" + intent.action)
                     val data = intent.getStringExtra("com.symbol.datawedge.data_string") ?: return
                     val typology = intent.getStringExtra("com.symbol.datawedge.label_type") ?: ""
                     Log.d(TAG, "scan: type=$typology data=$data")
                     callback?.onBarcodeData(data, typology)
                 }
             }
-            val filter = IntentFilter("$packageName.RECVR").apply {
-                addCategory("android.intent.category.DEFAULT")
-            }
+            val filter = IntentFilter("$packageName.RECVR")
             context.registerReceiver(mScanReceiver, filter, Context.RECEIVER_EXPORTED)
-            Log.d(TAG, "Scan receiver registered")
+            Log.d(TAG, "Scan receiver registered for action=$packageName.RECVR (no category)")
         }
     }
 
@@ -170,7 +200,6 @@ class DataWedgeHandler(private val context: Context) {
     }
 
     // Soft trigger: tell DataWedge to start scanning programmatically.
-    // DataWedge API 6.2+ – works on all Zebra Android devices running DataWedge 6.2+.
     fun pullTrigger() {
         sendSoftTrigger("START_SCANNING")
     }
@@ -180,8 +209,8 @@ class DataWedgeHandler(private val context: Context) {
     }
 
     private fun sendSoftTrigger(state: String) {
-        val intent = android.content.Intent().apply {
-            action = "com.symbol.datawedge.api.ACTION"
+        val intent = Intent().apply {
+            action = DW_ACTION
             putExtra("com.symbol.datawedge.api.SOFT_SCAN_TRIGGER", state)
         }
         context.sendBroadcast(intent)
