@@ -38,7 +38,7 @@ class MainActivity : FlutterActivity() {
     private var eventSink: EventChannel.EventSink? = null
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    // True after the first successful initialize() call – prevents double-init
+    // True after the first successful initialize() call â prevents double-init
     private var initialized = false
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -148,15 +148,25 @@ class MainActivity : FlutterActivity() {
                 sendEvent(mapOf("type" to "barcodeData", "data" to data, "symbology" to typology))
             }
             override fun onProfileReady() {
-                Log.d(TAG, "DataWedge profile confirmed ready")
-                // Re-enable barcode after RFID is connected
-                enableDataWedgeBarcode()
+                Log.d(TAG, "DataWedge profile confirmed ready (best-effort)")
             }
             override fun onProfileError(error: String) {
                 Log.w(TAG, "DataWedge profile error (non-fatal): $error")
             }
         })
         dataWedgeHandler!!.startReceive()
+
+        // Zebra-prescribed sequence on Android 14:
+        // SET_CONFIG result is unreliable, so do not wait for onProfileReady().
+        // Wait ~1s for DataWedge to process the new profile, then SWITCH_TO_PROFILE,
+        // then ENABLE_PLUGIN. Ordering matters; both are required for scans to be
+        // delivered to this app.
+        mainHandler.postDelayed({
+            dataWedgeHandler?.switchToProfile()
+        }, 1000)
+        mainHandler.postDelayed({
+            dataWedgeHandler?.enableScannerPlugin()
+        }, 1500)
 
         initialized = true
     }
@@ -227,6 +237,13 @@ class MainActivity : FlutterActivity() {
         if (!initialized) return
         rfidHandler.onResume(buildRfidInterface())
         dataWedgeHandler?.startReceive()
+        // Mandatory on Android 14: DataWedge reverts to the default profile while
+        // the app is in the background. Re-activate ours each time.
+        dataWedgeHandler?.switchToProfile()
+        // Re-assert the scanner plugin is enabled for the active profile.
+        mainHandler.postDelayed({
+            dataWedgeHandler?.enableScannerPlugin()
+        }, 500)
     }
 
     override fun onPause() {
