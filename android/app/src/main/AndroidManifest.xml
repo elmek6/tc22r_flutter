@@ -27,6 +27,7 @@
             android:name="flutterEmbedding"
             android:value="2" />
 
+
         <!-- Required for Zebra RFID SDK3 on devices with EMDK service -->
         <uses-library
             android:name="com.symbol.emdk"
