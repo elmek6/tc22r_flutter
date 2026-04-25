@@ -1,16 +1,14 @@
 package com.ltrudu.rfid_sample_flutter
 
-import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
+import android.content.Intent
+import android.view.KeyEvent
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
-import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 
 /**
- * Flutter MainActivity for the RFID + Barcode sample.
+ * Flutter MainActivity for the Zebra TC22R RFID + Barcode sample.
  *
  * Channel contract (matches Dart side in lib/services/zebra_service.dart):
  *   MethodChannel: com.rfidsample/channel
@@ -22,117 +20,169 @@ import io.flutter.plugin.common.MethodChannel
  *     - setPower(powerIndex)-> Boolean
  *     - getMaxPowerIndex    -> Int
  *     - isConnected         -> Boolean
+ *     - setActiveMode(mode) -> Boolean   // "rfid" | "barcode"
  *
- *   EventChannel: com.rfidsample/events  (Map<String, Any>)
- *     type = rfidConnected | rfidDisconnected | rfidError | tagData |
- *            barcodeData | triggerPress | message
+ *   EventChannel: com.rfidsample/events
+ *     pushes Map<String, Any?> with "type" key:
+ *     rfidConnected | rfidDisconnected | rfidError | tagData
+ *     barcodeData   | triggerPress    | message
  *
- * References (researched via Google):
- *  - ZebraDevs RFID-Android-Inventory-Sample (RFIDHandler.java)
- *  - ZebraDevs DataWedge-Flutter-Demo (MainActivity.kt + DWInterface.kt)
- *  - Flutter issue #34993: EventSink must be invoked on the Android UI thread.
+ * Why this layout works on TC22R (RFID + barcode in one app):
+ *   1. RFID API3 SDK owns the UHF radio serial port via the rfidhost service.
+ *   2. The DataWedge profile we create for THIS app keeps RFID Input DISABLED
+ *      (so the SDK and DataWedge never fight over the radio) and Barcode Input
+ *      + Intent Output ENABLED.
+ *   3. The DataWedge profile is hard-bound to our package name via APP_LIST so
+ *      the broadcast intent only fires for us. The single most common reason
+ *      barcodes silently fail in custom apps is that Profile0 keeps stealing
+ *      the scan because no profile is associated with the package.
+ *   4. The hardware trigger is routed by activeMode: in "barcode" mode we send
+ *      the DataWedge SOFT_SCAN_TRIGGER START intent; in "rfid" mode we kick the
+ *      RFID inventory. Without this router the trigger always falls into RFID
+ *      and the barcode screen looks dead.
  */
 class MainActivity : FlutterActivity() {
 
-    companion object {
-        const val METHOD_CHANNEL = "com.rfidsample/channel"
-        const val EVENT_CHANNEL = "com.rfidsample/events"
-    }
+    private lateinit var methodChannel: MethodChannel
+    private lateinit var eventChannel: EventChannel
+    private var eventSink: EventChannel.EventSink? = null
 
-    private lateinit var rfidHandler: RfidHandler
-    private lateinit var dataWedgeHandler: DataWedgeHandler
+    private var rfid: RfidHandler? = null
+    private var dataWedge: DataWedgeHandler? = null
 
-    /**
-     * Wraps Flutter's EventSink so that all events from background threads
-     * (RFID reader thread, DataWedge BroadcastReceiver) are safely forwarded
-     * on the Android main thread, avoiding the @UiThread crash described in
-     * https://github.com/flutter/flutter/issues/34993
-     */
-    private class MainThreadEventSink : EventChannel.EventSink {
-        @Volatile private var sink: EventChannel.EventSink? = null
-        private val handler = Handler(Looper.getMainLooper())
-
-        fun attach(sink: EventChannel.EventSink?) { this.sink = sink }
-        fun detach() { this.sink = null }
-
-        override fun success(event: Any?) {
-            handler.post { sink?.success(event) }
-        }
-        override fun error(code: String, msg: String?, details: Any?) {
-            handler.post { sink?.error(code, msg, details) }
-        }
-        override fun endOfStream() {
-            handler.post { sink?.endOfStream() }
-        }
-    }
-
-    private val eventSink = MainThreadEventSink()
+    @Volatile private var activeMode: String = "rfid"
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
-        // Event stream Flutter -> Dart
-        EventChannel(flutterEngine.dartExecutor.binaryMessenger, EVENT_CHANNEL)
-            .setStreamHandler(object : EventChannel.StreamHandler {
-                override fun onListen(args: Any?, sink: EventChannel.EventSink?) {
-                    eventSink.attach(sink)
-                }
-                override fun onCancel(args: Any?) {
-                    eventSink.detach()
-                }
-            })
+        methodChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, METHOD_CHANNEL)
+        eventChannel = EventChannel(flutterEngine.dartExecutor.binaryMessenger, EVENT_CHANNEL)
 
-        // Native handlers - both publish into the same EventSink wrapper.
-        rfidHandler = RfidHandler(applicationContext, eventSink)
-        dataWedgeHandler = DataWedgeHandler(this, eventSink)
-
-        // Method invocations Dart -> native
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, METHOD_CHANNEL)
-            .setMethodCallHandler { call: MethodCall, result: MethodChannel.Result ->
-                when (call.method) {
-                    "initialize" -> {
-                        rfidHandler.initialize()
-                        dataWedgeHandler.register()
-                        dataWedgeHandler.createOrUpdateProfile()
-                        result.success(true)
-                    }
-                    "startRfidInventory" -> {
-                        rfidHandler.startInventory()
-                        result.success(true)
-                    }
-                    "stopRfidInventory" -> {
-                        rfidHandler.stopInventory()
-                        result.success(true)
-                    }
-                    "startBarcodeScan" -> {
-                        dataWedgeHandler.softScan(true)
-                        result.success(true)
-                    }
-                    "stopBarcodeScan" -> {
-                        dataWedgeHandler.softScan(false)
-                        result.success(true)
-                    }
-                    "setPower" -> {
-                        val idx = call.argument<Int>("powerIndex") ?: 0
-                        rfidHandler.setPower(idx)
-                        result.success(true)
-                    }
-                    "getMaxPowerIndex" -> result.success(rfidHandler.maxPowerIndex())
-                    "isConnected"     -> result.success(rfidHandler.isConnected())
-                    else -> result.notImplemented()
-                }
+        eventChannel.setStreamHandler(object : EventChannel.StreamHandler {
+            override fun onListen(arguments: Any?, events: EventChannel.EventSink) {
+                eventSink = events
             }
+            override fun onCancel(arguments: Any?) {
+                eventSink = null
+            }
+        })
+
+        methodChannel.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "initialize" -> {
+                    initHandlersIfNeeded()
+                    result.success(true)
+                }
+                "startRfidInventory" -> {
+                    rfid?.startInventory()
+                    result.success(true)
+                }
+                "stopRfidInventory" -> {
+                    rfid?.stopInventory()
+                    result.success(true)
+                }
+                "startBarcodeScan" -> {
+                    dataWedge?.softScanStart()
+                    result.success(true)
+                }
+                "stopBarcodeScan" -> {
+                    dataWedge?.softScanStop()
+                    result.success(true)
+                }
+                "setPower" -> {
+                    val idx = call.argument<Int>("powerIndex") ?: 0
+                    rfid?.setPower(idx)
+                    result.success(true)
+                }
+                "getMaxPowerIndex" -> result.success(rfid?.getMaxPowerIndex() ?: 270)
+                "isConnected" -> result.success(rfid?.isConnected() == true)
+                "setActiveMode" -> {
+                    val mode = call.argument<String>("mode") ?: "rfid"
+                    activeMode = if (mode == "barcode") "barcode" else "rfid"
+                    if (activeMode == "barcode") {
+                        // Stop the radio so the trigger is not held by RFID inventory.
+                        rfid?.stopInventory()
+                    } else {
+                        // Make sure no soft-scan is still pending if we leave barcode tab.
+                        dataWedge?.softScanStop()
+                    }
+                    result.success(true)
+                }
+                else -> result.notImplemented()
+            }
+        }
+    }
+
+    private fun initHandlersIfNeeded() {
+        if (rfid == null) {
+            rfid = RfidHandler(applicationContext) { event -> emit(event) }
+            rfid!!.connect()
+        }
+        if (dataWedge == null) {
+            dataWedge = DataWedgeHandler(applicationContext) { event -> emit(event) }
+            dataWedge!!.register()
+        }
+    }
+
+    private fun emit(event: Map<String, Any?>) {
+        val sink = eventSink ?: return
+        runOnUiThread { sink.success(event) }
+    }
+
+    /**
+     * Hardware trigger router. TC22R sends keycodes 102/103/280/281/282/293
+     * depending on the build. We swallow them and route to RFID or DataWedge
+     * based on activeMode.
+     */
+    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        if (isZebraTriggerKey(keyCode)) {
+            emit(mapOf("type" to "triggerPress", "pressed" to true))
+            if (activeMode == "barcode") dataWedge?.softScanStart()
+            else rfid?.startInventory()
+            return true
+        }
+        return super.onKeyDown(keyCode, event)
+    }
+
+    override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
+        if (isZebraTriggerKey(keyCode)) {
+            emit(mapOf("type" to "triggerPress", "pressed" to false))
+            if (activeMode == "barcode") dataWedge?.softScanStop()
+            else rfid?.stopInventory()
+            return true
+        }
+        return super.onKeyUp(keyCode, event)
+    }
+
+    private fun isZebraTriggerKey(keyCode: Int): Boolean {
+        return keyCode == 102 || keyCode == 103 || keyCode == 280 ||
+            keyCode == 281 || keyCode == 282 || keyCode == 293
     }
 
     override fun onResume() {
         super.onResume()
-        // Re-apply DataWedge profile in case another app changed the active one.
-        if (this::dataWedgeHandler.isInitialized) dataWedgeHandler.switchToProfile()
+        // Re-assert our DataWedge profile every time we come back to the
+        // foreground: some Zebra builds re-bind Profile0 if the app was paused
+        // for a while, which is the most common cause of "barcode worked once
+        // then stopped".
+        dataWedge?.ensureProfile()
     }
 
     override fun onDestroy() {
-        if (this::rfidHandler.isInitialized) rfidHandler.dispose()
-        if (this::dataWedgeHandler.isInitialized) dataWedgeHandler.unregister()
+        try { rfid?.dispose() } catch (_: Throwable) {}
+        try { dataWedge?.unregister() } catch (_: Throwable) {}
         super.onDestroy()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        // Activity is singleTop. We use broadcast intents but forward here too,
+        // so a misconfigured START_ACTIVITY profile still reaches the handler.
+        dataWedge?.handleIntent(intent)
+    }
+
+    companion object {
+        private const val METHOD_CHANNEL = "com.rfidsample/channel"
+        private const val EVENT_CHANNEL = "com.rfidsample/events"
     }
 }
