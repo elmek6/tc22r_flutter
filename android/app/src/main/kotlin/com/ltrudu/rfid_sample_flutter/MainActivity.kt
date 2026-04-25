@@ -1,266 +1,191 @@
 package com.ltrudu.rfid_sample_flutter
 
-import android.Manifest
-import android.content.pm.PackageManager
-import android.os.Build
-import android.os.Handler
-import android.os.Looper
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.os.Bundle
 import android.util.Log
-import androidx.core.app.ActivityCompat
-import androidx.core.content.ContextCompat
-import com.zebra.rfid.api3.TagData
-import io.flutter.embedding.android.FlutterActivity
-import io.flutter.embedding.engine.FlutterEngine
-import io.flutter.plugin.common.EventChannel
-import io.flutter.plugin.common.MethodChannel
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 
-class MainActivity : FlutterActivity() {
+// DataWedge handler following Zebra's ScannerActivity.java pattern exactly
+// Key changes based on official Zebra samples:
+// 1. Intent action: com.packagename.ACTION (not .RECVR) 
+// 2. Profile initially enabled scanner_input_enabled=true
+// 3. No addCategory() in receiver filter
+// 4. Scanner plugin starts enabled, not disabled
+class DataWedgeHandler(private val context: Context) {
 
     companion object {
-        const val TAG = "MAIN_ACTIVITY"
-        const val METHOD_CHANNEL = "com.rfidsample/channel"
-        const val EVENT_CHANNEL = "com.rfidsample/events"
-        const val BT_PERMISSION_CODE = 100
+        const val TAG = "DW_HANDLER"
+        private const val DW_ACTION = "com.symbol.datawedge.api.ACTION"
+        private const val DW_SET_CONFIG = "com.symbol.datawedge.api.SET_CONFIG"
+        private const val DW_RESULT_ACTION = "com.symbol.datawedge.api.RESULT_ACTION"
+        private const val DW_RESULT_INFO = "com.symbol.datawedge.api.RESULT_INFO"
+        private const val DW_SEND_RESULT = "com.symbol.datawedge.api.SEND_RESULT"
     }
 
-    private val rfidHandler = RfidHandler()
-
-    // NOTE: ScannerHandler (DCS Scanner SDK) removed - it conflicts with RFID SDK
-    // Barcode scanning now uses DataWedge Intent API only
-    // See: RFID_API_COMMAND_TIMEOUT caused by ScannerSDK holding USB endpoints
-    
-    // DataWedge: used for barcode scanning (mirrors ScannerActivity.java)
-    private var dataWedgeHandler: DataWedgeHandler? = null
-
-    private var eventSink: EventChannel.EventSink? = null
-    private val mainHandler = Handler(Looper.getMainLooper())
-
-    // True after the first successful initialize() call â prevents double-init
-    private var initialized = false
-
-    override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
-        super.configureFlutterEngine(flutterEngine)
-        setupEventChannel(flutterEngine)
-        setupMethodChannel(flutterEngine)
+    interface DataWedgeHandlerInterface {
+        fun onBarcodeData(data: String, typology: String)
+        fun onProfileReady()
+        fun onProfileError(error: String)
     }
 
-    private fun setupEventChannel(flutterEngine: FlutterEngine) {
-        EventChannel(flutterEngine.dartExecutor.binaryMessenger, EVENT_CHANNEL)
-            .setStreamHandler(object : EventChannel.StreamHandler {
-                override fun onListen(arguments: Any?, sink: EventChannel.EventSink) {
-                    eventSink = sink
-                }
-                override fun onCancel(arguments: Any?) {
-                    eventSink = null
-                }
-            })
-    }
+    private var callback: DataWedgeHandlerInterface? = null
+    private var mScanReceiver: BroadcastReceiver? = null
+    private var mResultReceiver: BroadcastReceiver? = null
+    private var profileReady = false
 
-    private fun setupMethodChannel(flutterEngine: FlutterEngine) {
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, METHOD_CHANNEL)
-            .setMethodCallHandler { call, result ->
-                when (call.method) {
+    // Initialize DataWedge profile following Zebra's pattern
+    fun initialize(cb: DataWedgeHandlerInterface) {
+        callback = cb
+        val packageName = context.packageName
 
-                    // Flutter calls this once when the app is ready
-                    "initialize" -> {
-                        initializeHandlers()
-                        result.success(null)
-                    }
+        // Listen for SET_CONFIG result
+        registerResultReceiver(packageName)
 
-                    "startRfidInventory" -> {
-                        CoroutineScope(Dispatchers.IO).launch { rfidHandler.performInventory() }
-                        result.success(null)
-                    }
+        // Build profile config - following Zebra's ScannerActivity.java
+        val profileConfig = Bundle().apply {
+            putString("PROFILE_NAME", packageName)
+            putString("PROFILE_ENABLED", "true")
+            putString("CONFIG_MODE", "CREATE_IF_NOT_EXIST")
 
-                    "stopRfidInventory" -> {
-                        CoroutineScope(Dispatchers.IO).launch { rfidHandler.stopInventory() }
-                        result.success(null)
-                    }
-
-                    // Soft-trigger: DataWedge only (ScannerHandler removed due to RFID conflict)
-                    "startBarcodeScan" -> {
-                        dataWedgeHandler?.pullTrigger()
-                        result.success(null)
-                    }
-
-                    "stopBarcodeScan" -> {
-                        dataWedgeHandler?.releaseTrigger()
-                        result.success(null)
-                    }
-
-                    // powerIndex is the raw index into the reader's power table (not dBm)
-                    "setPower" -> {
-                        val powerIndex = call.argument<Int>("powerIndex") ?: 0
-                        CoroutineScope(Dispatchers.IO).launch {
-                            val msg = rfidHandler.setAntennaPower(powerIndex)
-                            sendEvent(mapOf("type" to "message", "message" to msg))
-                        }
-                        result.success(null)
-                    }
-
-                    "getMaxPowerIndex" -> {
-                        result.success(rfidHandler.getMaxPowerIndex())
-                    }
-
-                    "isConnected" -> {
-                        result.success(rfidHandler.isReaderConnected())
-                    }
-
-                    else -> result.notImplemented()
-                }
+            // App association
+            val appConfig = Bundle().apply {
+                putString("PACKAGE_NAME", packageName)
+                putStringArray("ACTIVITY_LIST", arrayOf("*"))
             }
-    }
+            putParcelableArray("APP_LIST", arrayOf(appConfig))
 
-    private fun initializeHandlers() {
-        val rfidInterface = buildRfidInterface()
-
-        // On Android 12+ we need BLUETOOTH_CONNECT at runtime before touching the SDK
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT)
-                != PackageManager.PERMISSION_GRANTED
-            ) {
-                ActivityCompat.requestPermissions(
-                    this,
-                    arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT),
-                    BT_PERMISSION_CODE
-                )
-                return
+            // Intent plugin: deliver barcodes as broadcast
+            // KEY FIX: Use .ACTION suffix like Zebra's BasicIntent1 sample
+            val intentPlugin = Bundle().apply {
+                putString("PLUGIN_NAME", "INTENT")
+                putString("RESET_CONFIG", "true")
+                putBundle("PARAM_LIST", Bundle().apply {
+                    putString("intent_output_enabled", "true")
+                    putString("intent_action", "$packageName.ACTION")
+                    putString("intent_category", "android.intent.category.DEFAULT")
+                    putString("intent_delivery", "2") // 2 = BROADCAST
+                })
             }
+
+            // Scanner plugin: ENABLED from start (following Zebra's pattern)
+            val scannerPlugin = Bundle().apply {
+                putString("PLUGIN_NAME", "BARCODE")
+                putString("RESET_CONFIG", "true")
+                putBundle("PARAM_LIST", Bundle().apply {
+                    putString("scanner_input_enabled", "true")
+                    putString("scanner_selection", "auto")
+                })
+            }
+
+            // Keystroke plugin: disabled
+            val keystrokePlugin = Bundle().apply {
+                putString("PLUGIN_NAME", "KEYSTROKE")
+                putString("RESET_CONFIG", "true")
+                putBundle("PARAM_LIST", Bundle().apply {
+                    putString("keystroke_output_enabled", "false")
+                })
+            }
+
+            putParcelableArray("PLUGIN_CONFIG", arrayOf(intentPlugin, scannerPlugin, keystrokePlugin))
         }
 
-        // CRITICAL: Disable DataWedge barcode scanner plugin BEFORE RFID connects
-        // This prevents conflicts on the shared USB transport
-        disableDataWedgeBarcode()
-
-        rfidHandler.onCreate(this, rfidInterface)
-        // Activity is already resumed when Flutter calls "initialize", so trigger onResume manually
-        rfidHandler.onResume(rfidInterface)
-
-        // Initialize DataWedge for barcode scanning (after RFID is connected)
-        // NOTE: ScannerHandler (DCS Scanner SDK) removed because it conflicts with RFID SDK
-        Log.d(TAG, "Initializing DataWedge for barcode scanning")
-        dataWedgeHandler = DataWedgeHandler(this)
-        dataWedgeHandler!!.initialize(object : DataWedgeHandler.DataWedgeHandlerInterface {
-            override fun onBarcodeData(data: String, typology: String) {
-                sendEvent(mapOf("type" to "barcodeData", "data" to data, "symbology" to typology))
-            }
-            override fun onProfileReady() {
-                Log.d(TAG, "DataWedge profile confirmed ready (best-effort)")
-            }
-            override fun onProfileError(error: String) {
-                Log.w(TAG, "DataWedge profile error (non-fatal): $error")
-            }
-        })
-        dataWedgeHandler!!.startReceive()
-
-        // Zebra-prescribed sequence on Android 14:
-        // SET_CONFIG result is unreliable, so do not wait for onProfileReady().
-        // Wait ~1s for DataWedge to process the new profile, then SWITCH_TO_PROFILE,
-        // then ENABLE_PLUGIN. Ordering matters; both are required for scans to be
-        // delivered to this app.
-        mainHandler.postDelayed({
-            dataWedgeHandler?.switchToProfile()
-        }, 1000)
-        mainHandler.postDelayed({
-            dataWedgeHandler?.enableScannerPlugin()
-        }, 1500)
-
-        initialized = true
+        val intent = Intent().apply {
+            action = DW_ACTION
+            putExtra(DW_SET_CONFIG, profileConfig)
+            putExtra(DW_SEND_RESULT, "true")
+        }
+        context.sendBroadcast(intent)
+        Log.d(TAG, "SET_CONFIG sent for profile: $packageName")
     }
 
-    // Disable DataWedge barcode plugin before RFID connects
-    private fun disableDataWedgeBarcode() {
-        Log.d(TAG, "Disabling DataWedge barcode plugin before RFID connect")
-        val dwIntent = android.content.Intent()
-        dwIntent.action = "com.symbol.datawedge.api.ACTION"
-        dwIntent.putExtra("com.symbol.datawedge.api.SCANNER_INPUT_PLUGIN", "DISABLE_PLUGIN")
-        sendBroadcast(dwIntent)
-    }
-
-    // Enable DataWedge barcode plugin after RFID is connected
-    private fun enableDataWedgeBarcode() {
-        Log.d(TAG, "Enabling DataWedge barcode plugin after RFID connect")
-        val dwIntent = android.content.Intent()
-        dwIntent.action = "com.symbol.datawedge.api.ACTION"
-        dwIntent.putExtra("com.symbol.datawedge.api.SCANNER_INPUT_PLUGIN", "ENABLE_PLUGIN")
-        sendBroadcast(dwIntent)
-    }
-
-    private fun buildRfidInterface(): RfidHandler.RfidHandlerInterface {
-        return object : RfidHandler.RfidHandlerInterface {
-            override fun onReaderConnected(message: String) {
-                val success = message.startsWith("Connected")
-                val type = if (success) "rfidConnected" else "rfidError"
-                sendEvent(mapOf("type" to type, "message" to message))
-            }
-            override fun onReaderDisconnected() {
-                sendEvent(mapOf("type" to "rfidDisconnected"))
-            }
-            override fun onTagData(tagData: Array<TagData>) {
-                val tags = tagData.map {
-                    mapOf("epc" to (it.tagID ?: ""), "rssi" to it.peakRSSI.toString())
+    private fun registerResultReceiver(packageName: String) {
+        if (mResultReceiver != null) return
+        mResultReceiver = object : BroadcastReceiver() {
+            override fun onReceive(ctx: Context, intent: Intent) {
+                val resultInfo = intent.getBundleExtra(DW_RESULT_INFO)
+                val result = resultInfo?.getString("RESULT") ?: "UNKNOWN"
+                val command = resultInfo?.getString("COMMAND") ?: ""
+                Log.d(TAG, "DW result: command=$command result=$result")
+                if (result == "SUCCESS" && command.contains("SET_CONFIG")) {
+                    profileReady = true
+                    callback?.onProfileReady()
+                } else if (result == "FAILURE") {
+                    callback?.onProfileError("SET_CONFIG failed: $result")
                 }
-                sendEvent(mapOf("type" to "tagData", "tags" to tags))
             }
-            override fun onMessage(message: String) {
-                sendEvent(mapOf("type" to "message", "message" to message))
-            }
-            // Physical trigger mirrors TagInventoryActivity.handleTriggerPress()
-            override fun handleTriggerPress(press: Boolean) {
-                if (press) CoroutineScope(Dispatchers.IO).launch { rfidHandler.performInventory() }
-                else CoroutineScope(Dispatchers.IO).launch { rfidHandler.stopInventory() }
-                sendEvent(mapOf("type" to "triggerPress", "pressed" to press))
-            }
+        }
+        val filter = IntentFilter(DW_RESULT_ACTION)
+        context.registerReceiver(mResultReceiver, filter, Context.RECEIVER_EXPORTED)
+    }
+
+    private fun unregisterResultReceiver() {
+        mResultReceiver?.let {
+            try { context.unregisterReceiver(it) } catch (e: Exception) { }
+            mResultReceiver = null
         }
     }
 
-    override fun onRequestPermissionsResult(
-        requestCode: Int,
-        permissions: Array<out String>,
-        grantResults: IntArray
-    ) {
-        if (requestCode == BT_PERMISSION_CODE) {
-            if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                initializeHandlers()
-            } else {
-                sendEvent(mapOf("type" to "message", "message" to "Bluetooth permissions not granted"))
+    // Register receiver for scan results
+    // KEY FIX: Use .ACTION action, and NO addCategory() like Zebra's BasicIntent1
+    fun startReceive() {
+        val packageName = context.packageName
+        if (mScanReceiver == null) {
+            mScanReceiver = object : BroadcastReceiver() {
+                override fun onReceive(ctx: Context, intent: Intent) {
+                    Log.d(TAG, "Received broadcast: " + intent.action)
+                    val data = intent.getStringExtra("com.symbol.datawedge.data_string") ?: return
+                    val typology = intent.getStringExtra("com.symbol.datawedge.label_type") ?: ""
+                    Log.d(TAG, "Barcode: type=$typology data=$data")
+                    callback?.onBarcodeData(data, typology)
+                }
             }
-        }
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-    }
-
-    override fun onResume() {
-        super.onResume()
-        if (!initialized) return
-        rfidHandler.onResume(buildRfidInterface())
-        dataWedgeHandler?.startReceive()
-        // Mandatory on Android 14: DataWedge reverts to the default profile while
-        // the app is in the background. Re-activate ours each time.
-        dataWedgeHandler?.switchToProfile()
-        // Re-assert the scanner plugin is enabled for the active profile.
-        mainHandler.postDelayed({
-            dataWedgeHandler?.enableScannerPlugin()
-        }, 500)
-    }
-
-    override fun onPause() {
-        rfidHandler.onPause()
-        dataWedgeHandler?.stopReceive()
-        super.onPause()
-    }
-
-    override fun onDestroy() {
-        rfidHandler.onDestroy()
-        super.onDestroy()
-    }
-
-    // Always delivers events on the main thread to satisfy Flutter's threading model
-    private fun sendEvent(data: Map<String, Any?>) {
-        mainHandler.post {
-            eventSink?.success(data)
+            // KEY FIX: Filter matches Zebra's BasicIntent1 - .ACTION suffix, no category
+            val filter = IntentFilter("$packageName.ACTION")
+            context.registerReceiver(mScanReceiver, filter, Context.RECEIVER_EXPORTED)
+            Log.d(TAG, "Scan receiver registered for action: $packageName.ACTION")
         }
     }
+
+    fun stopReceive() {
+        mScanReceiver?.let {
+            try { context.unregisterReceiver(it) } catch (e: Exception) { }
+            mScanReceiver = null
+            Log.d(TAG, "Scan receiver unregistered")
+        }
+        unregisterResultReceiver()
+    }
+
+    // Switch to profile (for onResume)
+    fun switchToProfile() {
+        val packageName = context.packageName
+        val intent = Intent().apply {
+            action = DW_ACTION
+            putExtra("com.symbol.datawedge.api.SWITCH_TO_PROFILE", packageName)
+        }
+        context.sendBroadcast(intent)
+        Log.d(TAG, "SWITCH_TO_PROFILE: $packageName")
+    }
+
+    // Soft trigger
+    fun pullTrigger() {
+        val intent = Intent().apply {
+            action = DW_ACTION
+            putExtra("com.symbol.datawedge.api.SOFT_SCAN_TRIGGER", "START_SCANNING")
+        }
+        context.sendBroadcast(intent)
+        Log.d(TAG, "SOFT_SCAN_TRIGGER: START_SCANNING")
+    }
+
+    fun releaseTrigger() {
+        val intent = Intent().apply {
+            action = DW_ACTION
+            putExtra("com.symbol.datawedge.api.SOFT_SCAN_TRIGGER", "STOP_SCANNING")
+        }
+        context.sendBroadcast(intent)
+        Log.d(TAG, "SOFT_SCAN_TRIGGER: STOP_SCANNING")
+    }
+
+    fun isReady() = profileReady
 }
