@@ -5,15 +5,13 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 version: 1.0.0+1
 
 environment:
-  sdk: ^3.8.1
+  sdk: ^3.9.2
 
 dependencies:
   flutter:
     sdk: flutter
 
-  # Flutter Hooks - React-style state management with useState, useEffect, etc.
-  flutter_hooks: ^0.20.5
-
+  permission_handler: ^11.0.0
   cupertino_icons: ^1.0.8
 
 dev_dependencies:

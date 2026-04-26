@@ -2,8 +2,6 @@ allprojects {
     repositories {
         google()
         mavenCentral()
-        // JitPack required for DataWedgeIntentWrapper (com.github.ltrudu:DataWedgeIntentWrapper)
-        maven { url = uri("https://jitpack.io") }
     }
 }
 

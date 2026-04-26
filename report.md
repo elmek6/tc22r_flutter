@@ -102,3 +102,35 @@ Resmi sorun giderme rehberinden:
 **Eşzamanlı SDK uyarısı:**
 - Cihazda aynı anda başka bir RFID kullanan uygulama (örn. 123RFID Demo, RWDemo) açıksa race condition oluşuyor — test sırasında bu uygulamaların kapalı olduğundan emin olun.
 
+---
+
+## DataWedge SET_CONFIG Bundle Serialization Tipleri (2026-04-24)
+
+ADB logcat incelemesinde SET_CONFIG gönderildiğinde DataWedge'in `ClassCastException` ürettiği görüldü:
+
+```
+W Bundle: Key PLUGIN_CONFIG expected ArrayList but value was [Landroid.os.Parcelable;
+W Bundle: Key APP_LIST expected Parcelable[] but value was ArrayList
+```
+
+Bu, DataWedge 11.x (TC22R Android 14) içinde farklı key'lerin farklı tip beklediğini göstermektedir.
+
+### Resmi Zebra örneği (DataCapture1/MainActivity.java — github.com/ZebraDevs)
+```java
+// PARAM_LIST → putBundle (tekil Bundle)
+pluginConfig.putBundle("PARAM_LIST", paramBundle);
+// PLUGIN_CONFIG → putBundle (tekil Bundle, tek plugin için)
+profileConfig.putBundle("PLUGIN_CONFIG", pluginConfig);
+// APP_LIST → putParcelableArray (Bundle[])
+profileConfig.putParcelableArray("APP_LIST", new Bundle[]{appConfig});
+```
+
+### Doğrulanan tipler (ADB ClassCastException'dan)
+| Key | DataWedge'in beklediği | Kullanılacak metod |
+|---|---|---|
+| `APP_LIST` | `Parcelable[]` (raw array) | `putParcelableArray` |
+| `PLUGIN_CONFIG` | `ArrayList` | `putParcelableArrayList` |
+| `PARAM_LIST` | `Bundle` (tekil) | `putBundle` |
+
+**Not:** Birden fazla plugin için `PLUGIN_CONFIG` üzerinde `putParcelableArrayList` kullanılmalı. Resmi örnek eski DataWedge versiyonu için `putBundle` (tek plugin) gösteriyor; DataWedge 11.x `getParcelableArrayList` çağırıyor.
+
