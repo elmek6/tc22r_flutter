@@ -1,8 +1,6 @@
 import 'dart:async';
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:permission_handler/permission_handler.dart';
 
 void main() => runApp(const App());
 
@@ -58,9 +56,6 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _init() async {
-    if (Platform.isAndroid) {
-      await [Permission.bluetoothScan, Permission.bluetoothConnect].request();
-    }
     try {
       await _method.invokeMethod('initialize');
     } catch (e) {
@@ -145,11 +140,7 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('TC22R Scanner'),
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-      ),
-      body: Column(
+            body: Column(
         children: [
           _RfidCard(
             connected: _rfidConnected,

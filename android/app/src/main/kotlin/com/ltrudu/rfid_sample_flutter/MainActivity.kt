@@ -59,7 +59,14 @@ class MainActivity : FlutterActivity() {
 
     private fun initHandlers() {
         if (rfid == null) {
-            rfid = RfidHandler(applicationContext) { event -> emit(event) }
+            rfid = RfidHandler(
+                applicationContext,
+                onEvent = { event -> emit(event) },
+                onTrigger = { pressed ->
+                    if (pressed) dataWedge?.disableScanner()
+                    else dataWedge?.enableScanner()
+                }
+            )
             rfid!!.connect()
         }
         if (dataWedge == null) {
@@ -74,30 +81,15 @@ class MainActivity : FlutterActivity() {
         runOnUiThread { sink.success(event) }
     }
 
-    // Hardware trigger → start/stop RFID inventory.
-    // DataWedge intercepts the upper (barcode) trigger before it reaches here,
-    // so these keycodes are the lower RFID trigger on TC22R.
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-        if (isZebraTrigger(keyCode)) {
-            dataWedge?.disableScanner()
-            rfid?.startInventory()
-            return true
-        }
+        emit(mapOf("type" to "message", "message" to "keyDown: $keyCode"))
         return super.onKeyDown(keyCode, event)
     }
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
-        if (isZebraTrigger(keyCode)) {
-            rfid?.stopInventory()
-            dataWedge?.enableScanner()
-            return true
-        }
+        emit(mapOf("type" to "message", "message" to "keyUp: $keyCode"))
         return super.onKeyUp(keyCode, event)
     }
-
-    private fun isZebraTrigger(keyCode: Int): Boolean =
-        keyCode == 102 || keyCode == 103 || keyCode == 280 ||
-            keyCode == 281 || keyCode == 282 || keyCode == 293
 
     // Re-assert DataWedge profile on every resume: some Zebra builds revert
     // to Profile0 after the app is backgrounded.

@@ -25,7 +25,8 @@ import java.util.concurrent.Executors
 
 class RfidHandler(
     private val context: Context,
-    private val onEvent: (Map<String, Any?>) -> Unit
+    private val onEvent: (Map<String, Any?>) -> Unit,
+    private val onTrigger: ((pressed: Boolean) -> Unit)? = null
 ) : Readers.RFIDReaderEventHandler {
 
     private val TAG = "RfidHandler"
@@ -208,10 +209,16 @@ class RfidHandler(
                 STATUS_EVENT_TYPE.HANDHELD_TRIGGER_EVENT -> {
                     val hh = e.StatusEventData.HandheldTriggerEventData.handheldEvent
                     when (hh) {
-                        HANDHELD_TRIGGER_EVENT_TYPE.HANDHELD_TRIGGER_PRESSED ->
+                        HANDHELD_TRIGGER_EVENT_TYPE.HANDHELD_TRIGGER_PRESSED -> {
+                            onTrigger?.invoke(true)
+                            startInventory()
                             onEvent(mapOf("type" to "triggerPress", "pressed" to true))
-                        HANDHELD_TRIGGER_EVENT_TYPE.HANDHELD_TRIGGER_RELEASED ->
+                        }
+                        HANDHELD_TRIGGER_EVENT_TYPE.HANDHELD_TRIGGER_RELEASED -> {
+                            stopInventory()
+                            onTrigger?.invoke(false)
                             onEvent(mapOf("type" to "triggerPress", "pressed" to false))
+                        }
                         else -> {}
                     }
                 }
