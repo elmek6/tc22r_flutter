@@ -102,6 +102,15 @@ class RfidHandler(
 
         maxPowerIdx = r.ReaderCapabilities.transmitPowerLevelValues.size - 1
 
+        // Set antenna to maximum transmit power — default index 0 is near-zero power and reads nothing.
+        try {
+            val antennaRfConfig = r.Config.Antennas.getAntennaRfConfig(1)
+            antennaRfConfig.transmitPowerIndex = maxPowerIdx
+            r.Config.Antennas.setAntennaRfConfig(1, antennaRfConfig)
+        } catch (e: Exception) {
+            Log.w(TAG, "setAntennaRfConfig failed: ${e.message}")
+        }
+
         val singulation = r.Config.Antennas.getSingulationControl(1)
         singulation.session = SESSION.SESSION_S1
         singulation.Action.inventoryState = INVENTORY_STATE.INVENTORY_STATE_A

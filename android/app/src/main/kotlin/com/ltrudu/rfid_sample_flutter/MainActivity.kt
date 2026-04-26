@@ -34,11 +34,13 @@ class MainActivity : FlutterActivity() {
                         result.success(null)
                     }
                     "startRfidInventory" -> {
+                        dataWedge?.disableScanner()
                         rfid?.startInventory()
                         result.success(null)
                     }
                     "stopRfidInventory" -> {
                         rfid?.stopInventory()
+                        dataWedge?.enableScanner()
                         result.success(null)
                     }
                     "startBarcodeScan" -> {
@@ -77,6 +79,7 @@ class MainActivity : FlutterActivity() {
     // so these keycodes are the lower RFID trigger on TC22R.
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         if (isZebraTrigger(keyCode)) {
+            dataWedge?.disableScanner()
             rfid?.startInventory()
             return true
         }
@@ -86,6 +89,7 @@ class MainActivity : FlutterActivity() {
     override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
         if (isZebraTrigger(keyCode)) {
             rfid?.stopInventory()
+            dataWedge?.enableScanner()
             return true
         }
         return super.onKeyUp(keyCode, event)

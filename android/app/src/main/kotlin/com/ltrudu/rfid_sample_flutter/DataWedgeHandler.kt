@@ -95,6 +95,9 @@ class DataWedgeHandler(
     fun softScanStart() = sendCommand(EXTRA_SOFT_SCAN_TRIGGER, "START_SCANNING")
     fun softScanStop() = sendCommand(EXTRA_SOFT_SCAN_TRIGGER, "STOP_SCANNING")
 
+    fun enableScanner() = sendCommand("com.symbol.datawedge.api.SCANNER_INPUT_PLUGIN", "ENABLE_PLUGIN")
+    fun disableScanner() = sendCommand("com.symbol.datawedge.api.SCANNER_INPUT_PLUGIN", "DISABLE_PLUGIN")
+
     // Forward singleTop onNewIntent in case profile is set to START_ACTIVITY delivery.
     fun handleIntent(intent: Intent) {
         if (intent.action == SCAN_ACTION) {
@@ -155,8 +158,8 @@ class DataWedgeHandler(
         return Bundle().apply {
             putString("PROFILE_NAME", PROFILE_NAME)
             putString("PROFILE_ENABLED", "true")
-            putString("CONFIG_MODE", "CREATE_IF_NOT_EXIST")
-            putParcelableArray("APP_LIST", arrayOf(appConfig))
+            putString("CONFIG_MODE", "OVERWRITE")
+            putParcelableArrayList("APP_LIST", arrayListOf(appConfig))
             putParcelableArrayList(
                 "PLUGIN_CONFIG",
                 arrayListOf(barcodeConfig, intentConfig, keystrokeConfig)
