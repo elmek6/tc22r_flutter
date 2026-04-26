@@ -1,7 +1,6 @@
 package com.ltrudu.rfid_sample_flutter
 
 import android.content.Intent
-import android.view.KeyEvent
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
@@ -51,6 +50,11 @@ class MainActivity : FlutterActivity() {
                         dataWedge?.softScanStop()
                         result.success(null)
                     }
+                    "setPower" -> {
+                        val dbm = call.argument<Int>("dbm") ?: 30
+                        rfid?.setTransmitPower(dbm)
+                        result.success(null)
+                    }
                     "isConnected" -> result.success(rfid?.isConnected() == true)
                     else -> result.notImplemented()
                 }
@@ -81,15 +85,6 @@ class MainActivity : FlutterActivity() {
         runOnUiThread { sink.success(event) }
     }
 
-    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-        emit(mapOf("type" to "message", "message" to "keyDown: $keyCode"))
-        return super.onKeyDown(keyCode, event)
-    }
-
-    override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
-        emit(mapOf("type" to "message", "message" to "keyUp: $keyCode"))
-        return super.onKeyUp(keyCode, event)
-    }
 
     // Re-assert DataWedge profile on every resume: some Zebra builds revert
     // to Profile0 after the app is backgrounded.

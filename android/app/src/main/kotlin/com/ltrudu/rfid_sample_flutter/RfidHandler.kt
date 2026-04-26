@@ -144,6 +144,24 @@ class RfidHandler(
         }
     }
 
+    fun setTransmitPower(dbm: Int) {
+        executor.execute {
+            val r = reader ?: return@execute
+            if (!r.isConnected) return@execute
+            try {
+                val levels = r.ReaderCapabilities.transmitPowerLevelValues
+                val target = dbm * 10
+                var idx = levels.indices.minByOrNull { Math.abs(levels[it] - target) } ?: maxPowerIdx
+                val cfg = r.Config.Antennas.getAntennaRfConfig(1)
+                cfg.transmitPowerIndex = idx
+                r.Config.Antennas.setAntennaRfConfig(1, cfg)
+                onEvent(mapOf("type" to "message", "message" to "Power set: ${dbm} dBm (idx $idx)"))
+            } catch (e: Exception) {
+                Log.w(TAG, "setTransmitPower: ${e.message}")
+            }
+        }
+    }
+
     fun isConnected(): Boolean = reader?.isConnected == true
 
     fun getMaxPowerIndex(): Int = maxPowerIdx
